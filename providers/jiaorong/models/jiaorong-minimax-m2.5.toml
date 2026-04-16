@@ -1,0 +1,21 @@
+name = "jiaorong-minimax-m2.5"
+family = "minimax"
+release_date = "2026-04-14"
+last_updated = "2026-04-14"
+attachment = false
+reasoning = false
+tool_call = true
+temperature = true
+open_weights = false
+
+[cost]
+input = 0
+output = 0
+
+[limit]
+context = 192_000
+output = 131_072
+
+[modalities]
+input = ["text"]
+output = ["text"]
