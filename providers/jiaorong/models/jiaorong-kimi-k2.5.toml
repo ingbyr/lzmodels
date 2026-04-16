@@ -1,0 +1,24 @@
+name = "jiaorong-kimi-k2.5"
+family = "kimi"
+release_date = "2026-04-14"
+last_updated = "2026-04-14"
+attachment = false
+reasoning = true
+tool_call = true
+temperature = true
+open_weights = false
+
+[interleaved]
+field = "reasoning_content"
+
+[cost]
+input = 0
+output = 0
+
+[limit]
+context = 256_000
+output = 65_536
+
+[modalities]
+input = ["text"]
+output = ["text"]
