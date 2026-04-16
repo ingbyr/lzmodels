@@ -1,0 +1,24 @@
+name = "jiaorong-deepseek-v3.2"
+family = "deepseek"
+release_date = "2026-04-14"
+last_updated = "2026-04-14"
+attachment = false
+reasoning = true
+tool_call = true
+temperature = true
+open_weights = false
+
+[interleaved]
+field = "reasoning_content"
+
+[cost]
+input = 0
+output = 0
+
+[limit]
+context = 160_000
+output = 8_192
+
+[modalities]
+input = ["text"]
+output = ["text"]
