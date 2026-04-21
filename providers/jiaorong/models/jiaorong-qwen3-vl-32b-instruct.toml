@@ -1,15 +1,12 @@
-name = "jiaorong-qwen3.5-122b-a10b"
+name = "jiaorong-qwen3-vl-32b-instruct"
 family = "qwen"
 release_date = "2026-04-14"
 last_updated = "2026-04-14"
 attachment = false
-reasoning = true
+reasoning = false
 tool_call = true
 temperature = true
 open_weights = false
-
-[interleaved]
-field = "reasoning_content"
 
 [cost]
 input = 0
