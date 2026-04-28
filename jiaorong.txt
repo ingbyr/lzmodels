@@ -1,0 +1,28 @@
+大语言模型：
+模型名称	参数量	上下文	是否支持深度思考
+jiaorong-instruct	72b	128K	否
+jiaorong-deepseek-v4-flash	284b	1M	是
+jiaorong-glm-5.1	754b	198K	是
+jiaorong-kimi-k2.6	1t	256K	是
+jiaorong-deepseek-v4-pro	1.6t	1M	是
+jiaorong-deepseek-v3.2	671b	160K	是
+jiaorong-kimi-k2.5	1t	256K	是
+jiaorong-glm-5	744b	198K	是
+jiaorong-minimax-m2.5	229b	192k	否
+jiaorong-qwen3.5-397b-a17b	397b	256k	是
+jiaorong-qwen3.5-122b-a10b	122b	256K	是
+jiaorong-qwen3.5-35b-a3b	35b	256K	是
+
+
+多模态模型：
+模型名称	参数量	上下文
+jiaorong-kimi-k2.6	1t	256K
+jiaorong-glm-4.6v	106b	128K
+jiaorong-kimi-k2.5	1t	256K
+jiaorong-qwen3.5-397b-a17b	397b	256K
+jiaorong-qwen3.5-122b-a10b	122b	256K
+jiaorong-qwen3.5-35b-a3b	35b	256K
+jiaorong-qwen3-vl-32b-instruct	32b	256K
+jiaorong-qwen3-vl-32b-thinking	32b	256K
+jiaorong-paddleocr-vl-1.5	0.9b	256K
+jiaorong-deepseek-ocr	3b	8K

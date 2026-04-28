@@ -5,6 +5,7 @@ attachment = false
 reasoning = false
 tool_call = true
 temperature = true
+structured_output = true
 open_weights = false
 
 [cost]

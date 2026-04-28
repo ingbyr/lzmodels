@@ -1,5 +1,6 @@
 name = "jiaorong-qwen3-vl-32b-thinking"
 family = "qwen"
+structured_output = true
 release_date = "2026-04-14"
 last_updated = "2026-04-14"
 attachment = false

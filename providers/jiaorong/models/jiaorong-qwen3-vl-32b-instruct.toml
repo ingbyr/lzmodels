@@ -1,20 +1,21 @@
 name = "jiaorong-qwen3-vl-32b-instruct"
 family = "qwen"
+structured_output = true
 release_date = "2026-04-14"
-last_updated = "2026-04-14"
-attachment = false
+last_updated = "2026-04-28"
+attachment = true
 reasoning = false
-tool_call = true
 temperature = true
+tool_call = true
 open_weights = false
 
 [cost]
-input = 0
-output = 0
+input = 0.104
+output = 0.416
 
 [limit]
 context = 256_000
-output = 16_384
+output = 32_768
 
 [modalities]
 input = ["text", "image"]

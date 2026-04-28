@@ -1,19 +1,20 @@
 name = "jiaorong-deepseek-ocr"
 family = "deepseek"
 release_date = "2026-04-14"
-last_updated = "2026-04-14"
-attachment = false
+last_updated = "2026-04-28"
+attachment = true
 reasoning = false
-tool_call = false
 temperature = true
-open_weights = false
+tool_call = false
+structured_output = true
+open_weights = true
 
 [cost]
-input = 0
-output = 0
+input = 0.03
+output = 0.03
 
 [limit]
-context = 8_000
+context = 8_192
 output = 8_192
 
 [modalities]
