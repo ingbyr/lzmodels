@@ -1,7 +1,0 @@
-[extends]
-from = "openai/gpt-4.1"
-omit = ["structured_output"]
-
-[modalities]
-input = ["text", "image"]
-output = ["text"]

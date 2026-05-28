@@ -1,6 +1,0 @@
-[extends]
-from = "anthropic/claude-sonnet-4-5-20250929"
-
-[limit]
-context = 1_000_000
-output = 64_000

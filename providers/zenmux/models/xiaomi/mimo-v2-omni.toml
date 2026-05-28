@@ -1,9 +1,0 @@
-name = "MiMo V2 Omni"
-
-[extends]
-from = "xiaomi/mimo-v2-omni"
-omit = ["interleaved"]
-
-[limit]
-context = 265_000
-output = 265_000

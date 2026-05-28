@@ -1,8 +1,0 @@
-attachment = false
-
-[extends]
-from = "deepseek/deepseek-v4-pro"
-
-[limit]
-context = 65_536
-output = 65_536

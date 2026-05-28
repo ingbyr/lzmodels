@@ -1,3 +1,0 @@
-[extends]
-from = "anthropic/claude-opus-4-7"
-omit = ["experimental.modes.fast"]

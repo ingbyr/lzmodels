@@ -1,6 +1,0 @@
-[extends]
-from = "google/gemini-flash-lite-latest"
-
-[cost]
-input = 0.25
-output = 1.5

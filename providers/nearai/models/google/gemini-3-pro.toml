@@ -1,8 +1,0 @@
-[extends]
-from = "google/gemini-3-pro-preview"
-omit = ["cost.tiers", "cost.context_over_200k"]
-
-[cost]
-input = 1.25
-output = 15.00
-cache_read = 0.00

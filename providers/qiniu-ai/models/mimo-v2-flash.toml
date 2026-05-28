@@ -1,9 +1,0 @@
-name = "Mimo-V2-Flash"
-
-[extends]
-from = "xiaomi/mimo-v2-flash"
-omit = ["interleaved"]
-
-[limit]
-context = 256_000
-output = 256_000
