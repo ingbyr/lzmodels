@@ -33,7 +33,7 @@ jobs:
         id: version
         run: |
           DATE_PART=$(TZ=Asia/Shanghai date +%Y%m%d)
-          HASH_PART=$(git rev-parse --short 7 HEAD)
+          HASH_PART=$(git rev-parse --short=7 HEAD)
           VERSION="${DATE_PART}-${HASH_PART}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "release_name=Models Data $VERSION" >> $GITHUB_OUTPUT
