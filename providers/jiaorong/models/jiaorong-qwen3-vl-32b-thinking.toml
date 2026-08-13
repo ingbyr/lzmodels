@@ -1,0 +1,25 @@
+name = "jiaorong-qwen3-vl-32b-thinking"
+family = "qwen"
+structured_output = true
+release_date = "2026-04-14"
+last_updated = "2026-04-14"
+attachment = false
+reasoning = true
+tool_call = true
+temperature = true
+open_weights = false
+
+[interleaved]
+field = "reasoning_content"
+
+[cost]
+input = 0
+output = 0
+
+[limit]
+context = 256_000
+output = 16_384
+
+[modalities]
+input = ["text", "image"]
+output = ["text"]

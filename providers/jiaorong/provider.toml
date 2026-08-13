@@ -1,0 +1,5 @@
+name = "交融"
+env = ["JIAORONG_API_KEY"]
+npm = "@ai-sdk/openai-compatible"
+api = "https://c4ai.ccccltd.cn/api/compatible/v1"
+doc = "https://c4ai.ccccltd.cn/open-doc/article/btpuere8/"
