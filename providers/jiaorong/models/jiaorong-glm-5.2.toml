@@ -1,7 +1,7 @@
 # Toggle: enable_thinking true|false
 # Budget: thinking_budget (integer reasoning tokens)
-name = "jiaorong-glm-4.6v"
-base_model="zhipuai/glm-4.6v"
+name = "jiaorong-glm-5.2"
+base_model="zhipuai/glm-5.2"
 
 reasoning_options = [
   { type = "toggle" },

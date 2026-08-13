@@ -1,26 +1,12 @@
+# Toggle: enable_thinking true|false
+# Budget: thinking_budget (integer reasoning tokens)
 name = "jiaorong-glm-5"
-family = "glm"
-release_date = "2026-04-14"
-last_updated = "2026-04-28"
-attachment = false
-reasoning = true
-temperature = true
-tool_call = true
-structured_output = true
-open_weights = true
+base_model="zhipuai/glm-5"
+
+reasoning_options = [
+  { type = "toggle" },
+  { type = "budget_tokens" },
+]
 
 [interleaved]
 field = "reasoning_content"
-
-[cost]
-input = 1.00
-output = 3.20
-cache_read = 0.20
-
-[limit]
-context = 198_000
-output = 131_072
-
-[modalities]
-input = ["text"]
-output = ["text"]

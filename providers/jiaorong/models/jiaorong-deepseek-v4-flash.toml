@@ -1,2 +1,12 @@
+# Toggle: enable_thinking true|false
+# Budget: thinking_budget (integer reasoning tokens)
 name = "jiaorong-deepseek-v4-flash"
 base_model="deepseek/deepseek-v4-flash"
+
+reasoning_options = [
+  { type = "toggle" },
+  { type = "budget_tokens" },
+]
+
+[interleaved]
+field = "reasoning_content"

@@ -1,27 +1,12 @@
+# Toggle: enable_thinking true|false
+# Budget: thinking_budget (integer reasoning tokens)
 name = "jiaorong-deepseek-v4-pro"
-family = "deepseek-thinking"
-release_date = "2026-04-28"
-last_updated = "2026-04-28"
-attachment = false
-reasoning = true
-temperature = true
-knowledge = "2025-05"
-tool_call = true
-structured_output = true
-open_weights = true
+base_model="deepseek/deepseek-v4-pro"
+
+reasoning_options = [
+  { type = "toggle" },
+  { type = "budget_tokens" },
+]
 
 [interleaved]
 field = "reasoning_content"
-
-[cost]
-input = 1.74
-output = 3.48
-cache_read = 0.0145
-
-[limit]
-context = 1_000_000
-output = 384_000
-
-[modalities]
-input = ["text"]
-output = ["text"]
