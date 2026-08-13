@@ -1,2 +1,0 @@
-name = "jiaorong-qwen3-vl-32b-instruct"
-base_model="alibaba/qwen3-vl-32b-instruct"
