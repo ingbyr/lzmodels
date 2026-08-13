@@ -1,0 +1,3 @@
+name = "jiaorong-minimax-m2.5"
+base_model="minimax/MiniMax-M2.5"
+reasoning = false

@@ -1,0 +1,12 @@
+# Toggle: enable_thinking true|false
+# Budget: thinking_budget (integer reasoning tokens)
+name = "jiaorong-kimi-k2.5"
+base_model="moonshotai/kimi-k2.5"
+
+reasoning_options = [
+  { type = "toggle" },
+  { type = "budget_tokens" },
+]
+
+[interleaved]
+field = "reasoning_content"

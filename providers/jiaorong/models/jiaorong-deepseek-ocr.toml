@@ -1,0 +1,2 @@
+name = "jiaorong-deepseek-ocr"
+base_model="deepseek/deepseek-ocr-2"

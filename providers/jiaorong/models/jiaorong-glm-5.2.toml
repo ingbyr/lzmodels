@@ -1,0 +1,12 @@
+# Toggle: enable_thinking true|false
+# Budget: thinking_budget (integer reasoning tokens)
+name = "jiaorong-glm-5.2"
+base_model="zhipuai/glm-5.2"
+
+reasoning_options = [
+  { type = "toggle" },
+  { type = "budget_tokens" },
+]
+
+[interleaved]
+field = "reasoning_content"
