@@ -23,6 +23,11 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Configure git committer
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Add remote oc
         run: git remote add oc https://github.com/anomalyco/models.dev.git
 
