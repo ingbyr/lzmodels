@@ -1,8 +1,9 @@
 base_model = "xai/grok-4.6"
+name = "Grok 4.6 (Vertex AI (OpenAI-compatible))"
 
 [[reasoning_options]]
 type = "effort"
-values = ["minimal", "low", "medium", "high", "xhigh"]
+values = ["minimal", "low", "medium", "high"]
 
 [cost]
 input = 2
