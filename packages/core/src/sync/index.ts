@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { AuthoredModel, AuthoredModelShape, ModelMetadata } from "../schema.js";
 import { openMissingModelIssues } from "./missing-issues.js";
+import { MissingReasoningOptionsError } from "./missing-reasoning-options.js";
 import { ambient } from "./providers/ambient.js";
 import { anthropic } from "./providers/anthropic.js";
 import { baseten } from "./providers/baseten.js";
@@ -25,6 +26,7 @@ import { inceptron } from "./providers/inceptron.js";
 import { kilo } from "./providers/kilo.js";
 import { llmgateway, llmgatewayProviders } from "./providers/llmgateway.js";
 import { mergeGateway } from "./providers/merge-gateway.js";
+import { meta } from "./providers/meta.js";
 import { nanoGpt } from "./providers/nano-gpt.js";
 import { openai } from "./providers/openai.js";
 import { ofox } from "./providers/ofox.js";
@@ -149,6 +151,7 @@ export const providers: {
   llmgateway: SyncProvider<any>;
   "llmgateway-providers": SyncProvider<any>;
   "merge-gateway": SyncProvider<any>;
+  meta: SyncProvider<any>;
   "nano-gpt": SyncProvider<any>;
   ofox: SyncProvider<any>;
   openai: SyncProvider<any>;
@@ -183,6 +186,7 @@ export const providers: {
   llmgateway,
   "llmgateway-providers": llmgatewayProviders,
   "merge-gateway": mergeGateway,
+  meta,
   "nano-gpt": nanoGpt,
   ofox,
   openai,
@@ -215,7 +219,7 @@ export const groups = {
     "vercel",
   ],
   cloudflare: ["cloudflare-ai-gateway", "cloudflare-workers-ai"],
-  direct: ["ambient", "anthropic", "baseten", "chutes", "cortecs", "deepinfra", "digitalocean", "github-copilot", "google", "hyper", "openai", "ovhcloud", "pioneer", "tinfoil", "venice", "wandb", "xai"],
+  direct: ["ambient", "anthropic", "baseten", "chutes", "cortecs", "deepinfra", "digitalocean", "github-copilot", "google", "hyper", "meta", "openai", "ovhcloud", "pioneer", "tinfoil", "venice", "wandb", "xai"],
 } as const;
 
 type ProviderID = keyof typeof providers;
@@ -248,16 +252,25 @@ export async function syncProvider<SourceModel>(
   const caseNormalizedDesiredPaths = new Map<string, string>();
   const desiredMetadata = new Map<string, { model: z.infer<typeof ModelMetadata>; content: string }>();
   const skippedRemote: string[] = [];
+  const missingReasoning = new Map<string, string>();
 
   for (const sourceModel of sourceModels) {
-    const translated = provider.translateModel(sourceModel, {
-      existing(id) {
-        return existing.get(`${id}.toml`)?.toml;
-      },
-      authored(id) {
-        return existing.get(`${id}.toml`)?.authored;
-      },
-    });
+    let translated: ReturnType<typeof provider.translateModel>;
+    try {
+      translated = provider.translateModel(sourceModel, {
+        existing(id) {
+          return existing.get(`${id}.toml`)?.toml;
+        },
+        authored(id) {
+          return existing.get(`${id}.toml`)?.authored;
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof MissingReasoningOptionsError)) throw error;
+      missingReasoning.set(error.modelId, error.message);
+      console.warn(error.message);
+      continue;
+    }
     if (translated === undefined) {
       const skippedID = provider.sourceID?.(sourceModel);
       if (skippedID !== undefined) skippedRemote.push(skippedID);
@@ -440,6 +453,10 @@ export async function syncProvider<SourceModel>(
   const missingLocal: string[] = [];
   for (const relativePath of new Set([...existing.keys(), ...brokenSymlinks])) {
     if (desired.has(relativePath)) continue;
+    if (missingReasoning.has(relativePath.slice(0, -5))) {
+      unchanged++;
+      continue;
+    }
     if (provider.deleteMissing === false) {
       missingLocal.push(relativePath);
       console.log(`Retaining model missing from source: ${relativePath}`);
@@ -462,22 +479,26 @@ export async function syncProvider<SourceModel>(
   }
 
   const notices = [
+    ...missingReasoning.values(),
     ...provider.skippedNotice?.(skippedRemote) ?? [],
     ...provider.missingNotice?.(missingLocal) ?? [],
   ];
 
+  const issueModels = [
+    ...(provider.skipCreates === true ? skippedRemote : []),
+    ...missingReasoning.keys(),
+  ];
   if (
-    provider.skipCreates === true
-    && provider.trackMissingModels !== false
-    && skippedRemote.length > 0
+    provider.trackMissingModels !== false
+    && issueModels.length > 0
     && options.openIssues === true
   ) {
     try {
       notices.push(
         ...await openMissingModelIssues(
           { id: provider.id, name: provider.name, modelsDir: provider.modelsDir },
-          skippedRemote,
-          { dryRun: options.dryRun },
+          issueModels,
+          { dryRun: options.dryRun, reasons: Object.fromEntries(missingReasoning) },
         ),
       );
     } catch (error) {
