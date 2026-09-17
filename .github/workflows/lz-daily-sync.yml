@@ -18,6 +18,7 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}  # 使用具备 workflow 权限的 PAT
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
