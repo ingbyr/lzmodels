@@ -6,6 +6,7 @@ import { z } from "zod";
 import { AuthoredModel, AuthoredModelShape, ModelMetadata } from "../schema.js";
 import { openMissingModelIssues } from "./missing-issues.js";
 import { MissingReasoningOptionsError } from "./missing-reasoning-options.js";
+import { aiand } from "./providers/aiand.js";
 import { ambient } from "./providers/ambient.js";
 import { anthropic } from "./providers/anthropic.js";
 import { baseten } from "./providers/baseten.js";
@@ -18,6 +19,7 @@ import { deepinfra } from "./providers/deepinfra.js";
 import { digitalocean } from "./providers/digitalocean.js";
 import { edenai } from "./providers/edenai.js";
 import { empiriolabs } from "./providers/empiriolabs.js";
+import { fireworksAi } from "./providers/fireworks-ai.js";
 import { friendli } from "./providers/friendli.js";
 import { githubCopilot } from "./providers/github-copilot.js";
 import { google } from "./providers/google.js";
@@ -138,6 +140,7 @@ export interface SyncResult {
 }
 
 export const providers: {
+  aiand: SyncProvider<any>;
   ambient: SyncProvider<any>;
   anthropic: SyncProvider<any>;
   baseten: SyncProvider<any>;
@@ -150,6 +153,7 @@ export const providers: {
   digitalocean: SyncProvider<any>;
   edenai: SyncProvider<any>;
   empiriolabs: SyncProvider<any>;
+  "fireworks-ai": SyncProvider<any>;
   friendli: SyncProvider<any>;
   "github-copilot": SyncProvider<any>;
   google: SyncProvider<any>;
@@ -175,6 +179,7 @@ export const providers: {
   wandb: SyncProvider<any>;
   xai: SyncProvider<any>;
 } = {
+  aiand,
   ambient,
   anthropic,
   baseten,
@@ -187,6 +192,7 @@ export const providers: {
   digitalocean,
   edenai,
   empiriolabs,
+  "fireworks-ai": fireworksAi,
   friendli,
   "github-copilot": githubCopilot,
   google,
@@ -231,7 +237,7 @@ export const groups = {
     "vercel",
   ],
   cloudflare: ["cloudflare-ai-gateway", "cloudflare-workers-ai"],
-  direct: ["ambient", "anthropic", "baseten", "chutes", "cortecs", "deepinfra", "digitalocean", "friendli", "github-copilot", "google", "hyper", "meta", "ollama-cloud", "openai", "ovhcloud", "pioneer", "tinfoil", "venice", "wandb", "xai"],
+  direct: ["aiand", "ambient", "anthropic", "baseten", "chutes", "cortecs", "deepinfra", "digitalocean", "fireworks-ai", "friendli", "github-copilot", "google", "hyper", "meta", "ollama-cloud", "openai", "ovhcloud", "pioneer", "tinfoil", "venice", "wandb", "xai"],
 } as const;
 
 type ProviderID = keyof typeof providers;
