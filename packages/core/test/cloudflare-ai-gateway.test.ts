@@ -251,6 +251,65 @@ test("rejects a catalog with no eligible proxied models", async () => {
   }
 });
 
+test("syncs Jev through shared TypeSafe metadata without inventing tool support", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalToken = process.env.CLOUDFLARE_API_TOKEN;
+  const originalAccount = process.env.CLOUDFLARE_ACCOUNT_ID;
+  process.env.CLOUDFLARE_API_TOKEN = "test";
+  process.env.CLOUDFLARE_ACCOUNT_ID = "test";
+  globalThis.fetch = async (input) => {
+    if (String(input).endsWith("/schema")) return new Response(null, { status: 404 });
+    return new Response(JSON.stringify(catalogPage([
+      {
+        model_id: "typesafe/jev",
+        task: "Text Generation",
+        context_length: 32_000,
+        provider_details: providerDetails({ input_tokens: 0.042, output_tokens: 0 }),
+      },
+      {
+        model_id: "openai/gpt-4.1",
+        task: "Text Generation",
+        context_length: 1_047_576,
+        provider_details: providerDetails({ input_tokens: 2, output_tokens: 8 }),
+      },
+    ])));
+  };
+
+  try {
+    const models = await cloudflareAiGateway.fetchModels();
+    expect(models.map((model) => model.catalog.model_id)).toEqual(["typesafe/jev", "openai/gpt-4.1"]);
+    expect(cloudflareAiGateway.translateModel(models[0]!, {
+      existing: () => undefined,
+      authored: () => undefined,
+    }).model).toEqual({
+      base_model: "typesafe/jev-latest",
+      cost: { input: 0.042, output: 0 },
+      limit: { context: 32_000 },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreEnv("CLOUDFLARE_API_TOKEN", originalToken);
+    restoreEnv("CLOUDFLARE_ACCOUNT_ID", originalAccount);
+  }
+});
+
+test("syncs Pareto through shared Unbiased metadata", () => {
+  expect(buildCloudflareAiGatewayModel({
+    model_id: "unbiased/pareto",
+    task: "Text Generation",
+    context_length: 262_144,
+    provider_details: providerDetails({
+      input_tokens: 2.5,
+      output_tokens: 7.5,
+      input_cached_tokens: 0.25,
+    }),
+  }, undefined)).toEqual({
+    base_model: "unbiased/pareto",
+    cost: { input: 2.5, output: 7.5, cache_read: 0.25 },
+    limit: { context: 262_144 },
+  });
+});
+
 test("validates Cloudflare page metadata", async () => {
   const originalFetch = globalThis.fetch;
   const originalToken = process.env.CLOUDFLARE_API_TOKEN;
