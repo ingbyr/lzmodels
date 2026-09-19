@@ -6,8 +6,8 @@ type = "effort"
 values = ["none", "high"]
 
 [cost]
-input = 0.065
+input = 0.04
 output = 0.18
 
 [limit]
-output = 131_072
+output = 235_929
