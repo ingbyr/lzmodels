@@ -1,27 +1,26 @@
-# Toggle: reasoning.enabled = true|false
-# https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
-name = "Ling 3.0 Flash VL (free)"
+name = "Space Bunny Alpha"
 description = "Multimodal reasoning model for visual analysis, planning, and tool use"
-family = "ling"
-release_date = "2026-09-10"
-last_updated = "2026-09-10"
+family = "alpha"
+release_date = "2026-09-23"
+last_updated = "2026-09-23"
 attachment = true
 reasoning = true
 temperature = true
 tool_call = true
 structured_output = false
-open_weights = true
+open_weights = false
 
 [[reasoning_options]]
-type = "toggle"
+type = "effort"
+values = ["low", "medium", "high", "xhigh", "max"]
 
 [cost]
 input = 0
 output = 0
 
 [limit]
-context = 262_144
-output = 32_768
+context = 1_000_000
+output = 524_288
 
 [modalities]
 input = ["text", "image", "video"]
