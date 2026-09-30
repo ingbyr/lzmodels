@@ -16,11 +16,11 @@ values = ["low", "high", "max"]
 
 [cost]
 input = 0.02
-output = 0.3
+output = 0.2475
 cache_read = 0.01
 
 [limit]
-context = 1_310_720
+context = 1_048_576
 output = 943_718
 
 [modalities]
