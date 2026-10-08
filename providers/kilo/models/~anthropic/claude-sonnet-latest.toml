@@ -6,7 +6,7 @@ release_date = "2026-04-27"
 last_updated = "2026-04-27"
 attachment = true
 reasoning = true
-temperature = true
+temperature = false
 tool_call = true
 structured_output = true
 knowledge = "2025-08-31"
@@ -19,7 +19,7 @@ values = ["low", "medium", "high", "xhigh", "max"]
 [cost]
 input = 2
 output = 10
-cache_read = 0.2
+cache_read = 0.1
 cache_write = 2.5
 
 [limit]
