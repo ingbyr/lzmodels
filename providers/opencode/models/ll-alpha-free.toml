@@ -12,6 +12,7 @@ tool_call = true
 structured_output = true
 temperature = true
 open_weights = true
+status = "deprecated"
 
 [interleaved]
 field = "reasoning_content"
