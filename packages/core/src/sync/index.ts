@@ -4,6 +4,15 @@ import { mergeDeep } from "remeda";
 import { z } from "zod";
 
 import { AuthoredModel, AuthoredModelShape, ModelMetadata } from "../schema.js";
+import {
+  formatModelV2,
+  multiplierModes,
+  patchModelV2,
+  providerModelToV2,
+  sameV1Model,
+  withoutModeCosts,
+} from "../model-file-v2.js";
+import { isSchemaV2, labModelV2ToV1, modelV2ToV1 } from "../translate.js";
 import { openMissingModelIssues } from "./missing-issues.js";
 import { MissingReasoningOptionsError } from "./missing-reasoning-options.js";
 import { aiand } from "./providers/aiand.js";
@@ -382,7 +391,7 @@ export async function syncProvider<SourceModel>(
       : preserveDescription(withReasoningOptions, existing.get(relativePath)?.authored);
     const parsed = SyncedAuthoredModel.safeParse(stripUndefined({
       id: translated.id,
-      ...withDescription,
+      ...preserveType(withDescription, existing.get(relativePath)?.authored),
     }));
     if (!parsed.success) {
       parsed.error.cause = { provider: provider.id, path: relativePath };
@@ -403,7 +412,10 @@ export async function syncProvider<SourceModel>(
   }
 
   const files: SyncResult["files"] = [];
+  const v2Notices: string[] = [];
   let unchanged = 0;
+  // Once a provider has migrated files, new ones are written in v2 too.
+  const writesV2 = [...existing.values()].some((model) => model.v2 !== undefined);
 
   const metadataDir = modelMetadataDir(provider.modelsDir);
   for (const [relativePath, file] of desiredMetadata) {
@@ -453,19 +465,60 @@ export async function syncProvider<SourceModel>(
     const current = existing.get(relativePath);
 
     if (current === undefined) {
+      if (writesV2) modelMetadata ??= await readModelMetadata(provider.modelsDir);
+      const content = writesV2
+        ? v2Content(
+            relativePath,
+            file.header,
+            undefined,
+            undefined,
+            withBaseModalities(file.model, modelMetadata ?? {}),
+            v2Notices,
+          ) ?? file.content
+        : file.content;
       files.push({ status: "created", path: filePath });
       if (options.dryRun) {
         console.log(`Would create ${relativePath}`);
       } else {
         await mkdir(path.dirname(filePath), { recursive: true });
         if (await isSymlink(filePath)) await rm(filePath, { force: true });
-        await Bun.write(filePath, file.content);
+        await Bun.write(filePath, content);
       }
       continue;
     }
 
     if (current.symlink && provider.preserveSymlinks) {
       unchanged++;
+      continue;
+    }
+
+    if (current.v2 !== undefined) {
+      modelMetadata ??= await readModelMetadata(provider.modelsDir);
+      const model = withBaseModalities(file.model, modelMetadata);
+      const headerChanged = provider.authoritativeHeaders && current.header !== file.header;
+      if (!headerChanged && sameV1Model(current.authored, model)) {
+        unchanged++;
+        continue;
+      }
+      const content = v2Content(
+        relativePath,
+        provider.authoritativeHeaders ? file.header : current.header,
+        current.v2,
+        current.authored,
+        model,
+        v2Notices,
+      );
+      if (content === undefined || options.newOnly) {
+        unchanged++;
+        continue;
+      }
+      files.push({ status: "updated", path: filePath });
+      if (options.dryRun) {
+        console.log(`Would update ${relativePath}`);
+      } else {
+        if (current.symlink) await rm(filePath, { force: true });
+        await Bun.write(filePath, content);
+      }
       continue;
     }
 
@@ -525,6 +578,7 @@ export async function syncProvider<SourceModel>(
   }
 
   const notices = [
+    ...v2Notices,
     ...missingReasoning.values(),
     ...provider.skippedNotice?.(skippedRemote) ?? [],
     ...provider.missingNotice?.(missingLocal) ?? [],
@@ -567,6 +621,61 @@ export async function syncProvider<SourceModel>(
   return result;
 }
 
+// Writes a synced model into a v2 file: a patch of the existing file, or a new
+// one. Returns undefined (and a notice) when the v2 file can't reproduce the
+// synced v1 fields, so the file is left for a manual update.
+function v2Content(
+  relativePath: string,
+  header: string,
+  doc: Record<string, unknown> | undefined,
+  before: ExistingModel | undefined,
+  model: z.infer<typeof SyncedAuthoredModel>,
+  notices: string[],
+) {
+  const { id, ...synced } = model;
+  try {
+    const carried = doc === undefined || before === undefined
+      ? []
+      : multiplierModes(doc, before, synced);
+    const after = withoutModeCosts(synced, carried);
+    const next = doc === undefined || before === undefined
+      ? providerModelToV2(after)
+      : patchModelV2(doc, withoutModeCosts(before, carried), after);
+    const content = header + formatModelV2(next);
+    const translated = modelV2ToV1(
+      { ...(Bun.TOML.parse(content) as Record<string, unknown>), id },
+      { modelPath: relativePath },
+    );
+    if (sameV1Model(withoutModeCosts(translated, carried), after)) return content;
+    throw new Error("the v2 file does not reproduce the synced fields");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const notice = `Could not write v2 model ${relativePath}: ${message}`;
+    notices.push(notice);
+    console.warn(notice);
+    return undefined;
+  }
+}
+
+// v2 files list both modality sides, but a synced base_model override only lists
+// the side that differs from the lab. The other side is the lab's.
+function withBaseModalities<T extends z.infer<typeof SyncedAuthoredModel>>(
+  model: T,
+  modelMetadata: Record<string, Record<string, unknown>>,
+): T {
+  const modalities = model.modalities as { input?: string[]; output?: string[] } | undefined;
+  if (!("base_model" in model) || typeof model.base_model !== "string") return model;
+  if (modalities === undefined || (modalities.input && modalities.output)) return model;
+  const base = modelMetadata[model.base_model]?.modalities as typeof modalities;
+  return {
+    ...model,
+    modalities: {
+      input: modalities.input ?? base?.input,
+      output: modalities.output ?? base?.output,
+    },
+  };
+}
+
 export function preserveBaseModel(model: SyncedModel, existing: ExistingModel | undefined): SyncedModel {
   if (existing?.base_model === undefined) return model;
   const translatedBase = "base_model" in model ? model.base_model : undefined;
@@ -580,6 +689,13 @@ export function preserveBaseModel(model: SyncedModel, existing: ExistingModel | 
     base_model: existing.base_model,
     base_model_omit: existing.base_model_omit,
   };
+}
+
+// Source APIs rarely report a model category, so a curated `type` is kept
+// unless the provider sets one.
+export function preserveType(model: SyncedModel, existing: ExistingModel | undefined): SyncedModel {
+  if (model.type !== undefined || existing?.type === undefined) return model;
+  return { ...model, type: existing.type } as SyncedModel;
 }
 
 export function preserveDescription(model: SyncedModel, existing: ExistingModel | undefined): SyncedModel {
@@ -646,6 +762,7 @@ async function readExisting(modelsDir: string) {
     toml: ExistingModel;
     header: string;
     symlink: boolean;
+    v2: Record<string, unknown> | undefined;
   }>();
   const brokenSymlinks = new Set<string>();
   let modelMetadata: Record<string, Record<string, unknown>> | undefined;
@@ -662,7 +779,12 @@ async function readExisting(modelsDir: string) {
       }
       throw error;
     }
-    const parsed = ExistingModel.safeParse(Bun.TOML.parse(text));
+    const raw = Bun.TOML.parse(text) as Record<string, unknown>;
+    const v2 = isSchemaV2(raw) ? raw : undefined;
+    const { id: _id, ...translated } = v2
+      ? modelV2ToV1({ ...raw, id: file.slice(0, -5) }, { modelPath: filePath })
+      : raw;
+    const parsed = ExistingModel.safeParse(v2 ? translated : raw);
     if (!parsed.success) {
       parsed.error.cause = { path: filePath };
       throw parsed.error;
@@ -676,7 +798,7 @@ async function readExisting(modelsDir: string) {
       ? authored
       : resolveBaseModel(authored, modelMetadata ?? {}, filePath);
 
-    existing.set(file, { authored, toml, header: leadingComments(text), symlink });
+    existing.set(file, { authored, toml, header: leadingComments(text), symlink, v2 });
   }
 
   return { models: existing, brokenSymlinks, modelMetadata };
@@ -729,7 +851,9 @@ async function readModelMetadata(modelsDir: string) {
     const toml = Bun.TOML.parse(
       await Bun.file(modelPath).text(),
     ) as Record<string, unknown>;
-    result[modelID] = inheritableModelMetadata(toml);
+    result[modelID] = inheritableModelMetadata(
+      isSchemaV2(toml) ? labModelV2ToV1({ ...toml, id: modelID }, { modelPath }) : toml,
+    );
   }
 
   return result;

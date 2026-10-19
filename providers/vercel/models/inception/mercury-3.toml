@@ -1,22 +1,21 @@
-name = "Cat Jam"
+name = "Mercury 3"
 description = "Reasoning model for deliberate analysis, multi-step problem solving, and tool use"
-release_date = "2026-10-15"
-last_updated = "2026-10-15"
+family = "mercury"
+release_date = "2026-10-19"
+last_updated = "2026-10-19"
 attachment = false
 reasoning = true
 tool_call = true
 open_weights = false
-
-[[reasoning_options]]
-type = "effort"
-values = ["low", "medium", "high", "xhigh", "max"]
+reasoning_options = []
 
 [cost]
-input = 0
-output = 0
+input = 0.1
+output = 0.35
+cache_read = 0.01
 
 [limit]
-context = 1_048_576
+context = 1_000_000
 output = 131_072
 
 [modalities]

@@ -1,5 +1,11 @@
 # Source: https://ai.azure.com/catalog/models/DeepSeek-V4.1-Flash
-# Pricing not yet published on Azure's public pricing page.
+# Pricing: Azure Deepseek Models product, global deployment, USD per 1M tokens,
+# effective 2026-10-01. input 0.30, output 1.20, cached input 0.006.
+# Azure bills a flat rate equal to DeepSeek's peak rate (off-peak is half), so
+# these are 2x the off-peak figures recorded on providers/deepseek.
+# https://api-docs.deepseek.com/quick_start/pricing
+# Data-zone deployment is 0.33/1.32/0.0066.
+# https://prices.azure.com/api/retail/prices?$filter=productName eq 'Azure Deepseek Models'
 # Azure catalog lists context 1000k (same as the base model) and output 128k (base is 384k).
 # Direct endpoint: POST /models/chat/completions?api-version=2024-05-01-preview.
 # Its published request schema documents no toggle, effort, or reasoning budget.
@@ -9,6 +15,11 @@ name = "DeepSeek-V4.1-Flash"
 status = "beta"
 
 reasoning_options = []
+
+[cost]
+input = 0.3
+output = 1.2
+cache_read = 0.006
 
 [limit]
 output = 128_000

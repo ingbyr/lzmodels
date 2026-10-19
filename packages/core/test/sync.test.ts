@@ -86,7 +86,7 @@ import { buildGoogleModel, google, shouldTrackGoogleModel } from "../src/sync/pr
 import { buildTinfoilModel, tinfoil, type TinfoilModel } from "../src/sync/providers/tinfoil.js";
 import { resolveVeniceBaseModel } from "../src/sync/providers/venice.js";
 import { buildVercelModel, vercel } from "../src/sync/providers/vercel.js";
-import { buildWandbModel, type WandbModel } from "../src/sync/providers/wandb.js";
+import { buildWandbModel, mergeReasoningOptions, type WandbModel } from "../src/sync/providers/wandb.js";
 import { buildXAIModel, xai } from "../src/sync/providers/xai.js";
 
 function anthropicModel(overrides: Partial<AnthropicModel> = {}): AnthropicModel {
@@ -3124,6 +3124,37 @@ test("W&B preserves curated model dates", () => {
   });
 });
 
+test("W&B keeps hand-authored reasoning effort through a sync", () => {
+  const model: WandbModel = {
+    id: "zai-org/GLM-5.3",
+    name: "GLM 5.3",
+    attachment: false,
+    reasoning: true,
+    reasoning_options: [],
+    tool_call: true,
+    release_date: "2026-10-16",
+    last_updated: "2026-10-16",
+    open_weights: true,
+  };
+
+  expect(buildWandbModel(model, {
+    reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+  }, undefined)).toMatchObject({
+    reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
+  });
+});
+
+test("W&B takes on/off from the endpoint and effort from the authored file", () => {
+  const effort = { type: "effort" as const, values: ["high" as const, "max" as const] };
+  expect(mergeReasoningOptions([{ type: "toggle" }], [effort])).toEqual([{ type: "toggle" }, effort]);
+  expect(mergeReasoningOptions([], [{ type: "toggle" }, effort])).toEqual([effort]);
+  expect(mergeReasoningOptions([{ type: "toggle" }], [{ type: "effort", values: ["none", "high"] }]))
+    .toEqual([{ type: "effort", values: ["none", "high"] }]);
+  expect(mergeReasoningOptions([{ type: "toggle" }], [{ type: "toggle" }])).toEqual([{ type: "toggle" }]);
+  expect(mergeReasoningOptions([], [{ type: "budget_tokens" }])).toEqual([]);
+  expect(mergeReasoningOptions([], undefined)).toEqual([]);
+});
+
 test("formats reasoning efforts from lowest to highest", () => {
   const content = formatToml({
     id: "example/model",
@@ -4131,6 +4162,7 @@ test("filters unknown Merge Gateway modalities without rejecting the catalog", (
 
   expect(synced).toEqual({
     base_model: "openai/gpt-5.6-sol",
+    structured_output: true,
     cost: {
       input: 5,
       output: 30,
@@ -4144,6 +4176,7 @@ test("factors Merge Gateway GPT-5.6 Sol against canonical metadata", () => {
 
   expect(model).toEqual({
     base_model: "openai/gpt-5.6-sol",
+    structured_output: true,
     cost: {
       input: 5,
       output: 30,
@@ -4397,6 +4430,7 @@ test("merges authoritative Merge Gateway cache pricing field by field", () => {
 
   expect(model).toEqual({
     base_model: "openai/gpt-5.6-sol",
+    structured_output: true,
     cost: {
       input: 3.75,
       output: 22.5,
