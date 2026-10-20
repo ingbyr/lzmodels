@@ -1,7 +1,11 @@
+# Per-turn effort needs the mid-conversation-output-config-2026-07-01 header from the first turn:
+# toggling it mid-session splits the cache on this model.
+# tools.updates: tool_addition/tool_removal blocks (inline-tools-2026-09-15) keep the cache.
 schema = 2
 base_model = "anthropic/claude-opus-5"
 
 [capabilities]
+tools = { supported = true, updates = true }
 reasoning = { supported = true, effort = ["low", "medium", "high", "xhigh", "max"] }
 structured_output = true
 system_updates = true

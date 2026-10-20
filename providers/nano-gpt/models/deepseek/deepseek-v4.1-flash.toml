@@ -1,13 +1,14 @@
 base_model = "deepseek/deepseek-v4.1-flash"
+structured_output = true
 
 [[reasoning_options]]
 type = "effort"
 values = ["none", "low", "high", "max"]
 
 [cost]
-input = 0.14
-output = 0.42
-cache_read = 0.0042
+input = 0.0354
+output = 0.1416
+cache_read = 0.000708
 
 [limit]
 input = 1_000_000

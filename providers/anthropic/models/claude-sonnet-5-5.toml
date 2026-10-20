@@ -4,10 +4,12 @@
 # Pricing: https://platform.claude.com/docs/en/models/sonnet-5-5/overview
 # Cache read $0.10/MTok (5% of base input): https://platform.claude.com/docs/en/about-claude/pricing
 # Pricing: https://www.anthropic.com/pricing
+# tools.updates: tool_addition/tool_removal blocks (inline-tools-2026-09-15) keep the cache.
 schema = 2
 base_model = "anthropic/claude-sonnet-5-5"
 
 [capabilities]
+tools = { supported = true, updates = true }
 reasoning = { supported = true, effort = ["low", "medium", "high", "xhigh", "max"] }
 structured_output = true
 system_updates = true

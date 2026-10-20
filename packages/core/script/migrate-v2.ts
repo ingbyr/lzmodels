@@ -13,8 +13,9 @@ import {
   providerModelToV2,
   sameV1Model,
 } from "../src/model-file-v2.js";
-import { ModelMetadata } from "../src/schema.js";
-import { isSchemaV2, labModelV2ToV1, modelV2ToV1 } from "../src/translate.js";
+import { resolveProtocol } from "../src/generate-v2.js";
+import { ModelMetadata, type Model, type Provider } from "../src/schema.js";
+import { isSchemaV2, labModelV2ToV1, modelV2ToV1, readLabModel } from "../src/translate.js";
 
 const root = path.join(import.meta.dirname, "..", "..", "..");
 const RAW_TABLES = /^\[\[(benchmarks|links|weights)\]\]\s*$/;
@@ -27,6 +28,15 @@ if ((kind !== "lab" && kind !== "provider") || id === undefined) {
 
 const dir =
   kind === "lab" ? path.join(root, "models", id) : path.join(root, "providers", id, "models");
+const providerToml =
+  kind === "provider"
+    ? ({
+        ...(Bun.TOML.parse(
+          await Bun.file(path.join(root, "providers", id, "provider.toml")).text(),
+        ) as Record<string, unknown>),
+        id,
+      } as unknown as Provider)
+    : undefined;
 let migrated = 0;
 for await (const file of new Bun.Glob("**/*.toml").scan({ cwd: dir, absolute: true })) {
   const text = await Bun.file(file).text();
@@ -59,7 +69,36 @@ function migrateProvider(text: string, toml: Record<string, unknown>, modelID: s
   if (body.some((line) => line.trim().startsWith("#")) || tail.length > 0) {
     throw new Error(`${modelID}: comments or raw tables outside the header would be lost`);
   }
-  const next = [...header, formatModelV2(providerModelToV2(toml))].join("\n");
+  // v2 modalities replace the base's as a whole, so a v1 file that overrides only
+  // `input` or `output` takes the other side from its base model.
+  const modalities = toml.modalities as Record<string, unknown> | undefined;
+  if (modalities !== undefined && (modalities.input === undefined || modalities.output === undefined)) {
+    const base = readLabModel(path.join(root, "models", `${toml.base_model}.toml`), String(toml.base_model));
+    toml.modalities = { ...(base.modalities as object), ...modalities };
+    // Same as the base: inherit it, which keeps the lab's MIME types in v2.
+    if (isDeepStrictEqual(toml.modalities, base.modalities)) delete toml.modalities;
+  }
+  // v2 derives `attachment` from modalities, so an override that disagrees with
+  // the modalities (its own or inherited) can't be kept.
+  if (toml.base_model !== undefined && (toml.attachment !== undefined || toml.modalities !== undefined)) {
+    const base = readLabModel(path.join(root, "models", `${toml.base_model}.toml`), String(toml.base_model));
+    const attachment = toml.attachment ?? base.attachment;
+    const input =
+      (toml.modalities as { input?: string[] } | undefined)?.input ??
+      (base.modalities as { input?: string[] } | undefined)?.input ??
+      [];
+    if (attachment !== undefined && attachment !== input.some((modality) => modality !== "text")) {
+      throw new Error(`${modelID}: attachment = ${attachment} disagrees with the modalities`);
+    }
+  }
+  const provider = toml.provider as { npm?: string; shape?: "responses" | "completions" } | undefined;
+  const protocol = resolveProtocol(
+    { ...toml, id: modelID } as unknown as Model,
+    providerToml!,
+    provider?.npm ?? providerToml!.npm,
+    provider?.shape,
+  );
+  const next = [...header, formatModelV2(providerModelToV2(toml, protocol))].join("\n");
   const after = modelV2ToV1({ ...(Bun.TOML.parse(next) as Record<string, unknown>), id: modelID });
   if (!sameV1Model(toml, after)) {
     console.error(JSON.stringify({ before: toml, after }, null, 2));
@@ -79,6 +118,9 @@ function formatLabModel(text: string, model: ModelMetadata) {
   if (model.tool_call === undefined || model.reasoning === undefined) {
     throw new Error(`${model.id}: missing tool_call or reasoning`);
   }
+  if (model.temperature === undefined) {
+    throw new Error(`${model.id}: missing temperature (v2 lab files require it)`);
+  }
 
   const out: string[] = [...header, "schema = 2"];
   out.push(...identityLines(model));
@@ -92,7 +134,13 @@ function formatLabModel(text: string, model: ModelMetadata) {
   if (model.structured_output !== undefined) {
     throw new Error(`${model.id}: move structured_output to the provider files first`);
   }
-  if (model.temperature !== undefined) out.push(`temperature = ${model.temperature}`);
+  // v2 lab files require top_p and top_k, which v1 doesn't have. They start out
+  // matching temperature; check them against the lab's docs after migrating.
+  out.push(
+    `temperature = ${model.temperature}`,
+    `top_p = ${model.temperature}`,
+    `top_k = ${model.temperature}`,
+  );
   out.push(...limitLines(model.limit!));
   if (tail.length > 0) out.push("", ...tail);
   return `${out.join("\n").trimEnd()}\n`;

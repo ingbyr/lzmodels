@@ -40,6 +40,26 @@ consumers route to the Messages/Responses endpoint rather than the generic compa
 The generator emits override-only `base_model` stubs (see the repo `AGENTS.md`): the lab
 metadata lives under `models/<lab>/`, and each provider file only records real deltas.
 
+### Speech and transcription models
+
+`Text-to-Speech` and `Automatic Speech Recognition` catalog rows are written as complete
+v2-only files (`schema = 2`, `v2_only = true`), so they stay out of the v1 API:
+
+- `base_model` points at a lab file of the same type (`speech` / `transcription`). Ids that
+  match a lab file without punctuation (`eleven-v3` → `eleven_v3`) resolve on their own; other
+  aliases are mapped in `curation.toml`. A lab of another type fails the sync.
+- `[api.workers-ai-run]` is the REST API's universal endpoint: `POST {base_url}/run` with
+  `{ model, input }`, where `input` follows the model's catalog schema.
+- `[modalities]` comes from the schema: a TTS model's output format enum, or the formats an
+  STT model's file field documents. It is written only when it differs from the lab.
+- `[cost]` maps `provider_details` pricing to v2 units: `input_characters` → per 1M
+  characters, `input_audio_minutes` → per minute (feature surcharges and streaming become
+  conditional overrides), `*_tokens` → per 1M tokens by modality. If any pricing key has no
+  mapping, the file gets no `[cost]` and its header lists the keys.
+- `name` is written only for aliases whose catalog name is more than the lab name with a vendor prefix.
+
+Image, video, music, document and realtime (`websocket`) tasks aren't synced.
+
 ### `--check`
 
 ```bash
@@ -89,6 +109,8 @@ reasoning_options = [{ type = "budget_tokens", min = 1024 }]
 | `reasoning_options` | derived from the per-model `schema.input`; curated for native-format providers and always-on reasoners |
 | `structured_output` | curated — a live-tested judgement (schema acceptance ≠ conformance) |
 | `[provider] npm` | derived — `@ai-sdk/anthropic` / `@ai-sdk/openai` for the native-passthrough families |
+| leading comments | curated — `prefix_notes` (per family, by model id prefix) followed by the model's `note` |
+| v2-only fields (`cache`, `system_updates`, `effort_updates`, `tools.updates`, cache-write TTL prices) | hand-authored in the model files (schema 2); sync keeps them and cites their sources through `prefix_notes` |
 
 `reasoning_options` is only written when the `base_model` declares `reasoning = true`; the
 schema forbids it otherwise. When a reasoning model has no derivable and no curated shape,

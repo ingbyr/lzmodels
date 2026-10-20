@@ -3,6 +3,7 @@
 # Effort: top-level reasoning_effort = xhigh|high|medium|low.
 # Generic file input is omitted; it does not imply PDF support.
 base_model = "xai/grok-4.6"
+structured_output = true
 
 [[reasoning_options]]
 type = "effort"

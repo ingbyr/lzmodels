@@ -699,9 +699,9 @@ export const LabCapabilitiesV2 = z
   .object({
     tools: ToolsSupportV2,
     reasoning: z.object({ supported: z.boolean() }).strict(),
-    temperature: z.boolean().optional(),
-    top_p: z.boolean().optional(),
-    top_k: z.boolean().optional(),
+    temperature: z.boolean(),
+    top_p: z.boolean(),
+    top_k: z.boolean(),
   })
   .strict();
 
@@ -711,6 +711,8 @@ export type LabCapabilitiesV2 = z.infer<typeof LabCapabilitiesV2>;
 // that hosts inherit through `base_model`.
 export const LabModelV2 = z
   .object({
+    // Published in the v2 API only; v1 output leaves the model out.
+    v2_only: z.boolean().optional(),
     id: z.string(),
     type: ModelTypeV2.optional(),
     name: z.string().min(1, "Model name cannot be empty"),
@@ -733,11 +735,28 @@ export const LabModelV2 = z
 
 export type LabModelV2 = z.infer<typeof LabModelV2>;
 
+// A provider model file's own API, when it differs from the provider's default:
+// another SDK, base URL or protocol, or a reasoning wire requirement. Omitted
+// parts come from the provider.
+export const AuthoredApiEntryV2 = z
+  .object({
+    base_url: ApiBaseUrlV2.optional(),
+    sdk: z.object({ aisdk: z.string().min(1) }).strict().optional(),
+    compatibility: CompatibilityV2.pick({ reasoning_field: true, replay_reasoning: true })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export type AuthoredApiEntryV2 = z.infer<typeof AuthoredApiEntryV2>;
+
 // Authored provider model file (`providers/<provider>/models/<model>.toml`). With
 // `base_model`, it holds only what differs from the lab file. Without it, it is a
 // full definition.
 export const AuthoredModelV2 = z
   .object({
+    // Published in the v2 API only; v1 output leaves the model out.
+    v2_only: z.boolean().optional(),
     id: z.string(),
     base_model: z.string().min(1, "Base model cannot be empty").optional(),
     base_model_omit: z.array(z.string()).optional(),
@@ -754,6 +773,7 @@ export const AuthoredModelV2 = z
     capabilities: CapabilitiesOverrideV2.optional(),
     limit: LimitV2.optional(),
     cost: CostV2.optional(),
+    api: z.record(ApiProtocolV2, AuthoredApiEntryV2).optional(),
     experimental: ExperimentalV2.optional(),
     metadata: z.record(JsonValue).optional(),
   })

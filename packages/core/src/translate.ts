@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   AuthoredModelV2,
   LabModelV2,
+  type AuthoredApiEntryV2,
   type CostV2,
   type CostWhenV2,
   type ReasoningSupportV2,
@@ -123,6 +124,32 @@ export function modelV2ToV1(
     status: model.status,
     cost,
     experimental: toV1Experimental(model, cost),
+    ...toV1Api(model.api),
+  });
+}
+
+// v1 models have one API: `provider` holds its SDK, base URL and shape, and
+// `interleaved` its reasoning requirement. With several `[api.<protocol>]`
+// tables, the first one in the file is the default and becomes the v1 API.
+// The protocol only becomes a v1 `shape` where it isn't the SDK's default
+// (OpenAI and Azure default to Responses).
+function toV1Api(api: Record<string, AuthoredApiEntryV2> | undefined) {
+  const first = Object.entries(api ?? {})[0];
+  if (first === undefined) return {};
+  const [protocol, { base_url, sdk, compatibility }] = first;
+  const npm = sdk?.aisdk;
+  const responsesByDefault = npm === "@ai-sdk/openai" || npm === "@ai-sdk/azure";
+  const shape =
+    protocol === "responses" && !responsesByDefault
+      ? "responses"
+      : protocol === "chat-completions" && responsesByDefault
+        ? "completions"
+        : undefined;
+  const provider = withoutUndefined({ npm, api: base_url, shape });
+  const field = compatibility?.reasoning_field;
+  return withoutUndefined({
+    interleaved: field !== undefined ? { field } : compatibility?.replay_reasoning ? true : undefined,
+    provider: Object.keys(provider).length > 0 ? provider : undefined,
   });
 }
 
@@ -145,6 +172,12 @@ function toReasoningOptions(reasoning: ReasoningSupportV2) {
 function costV2ToV1(cost: CostV2) {
   const input = cost.text?.input;
   const output = cost.text?.output;
+  // v1 prices are per text token, so media-only prices (per second, per image…) stay v2-only.
+  if (input === undefined && output === undefined) return undefined;
+  // Text input with media-only output (text-to-speech), or text priced per character,
+  // has no per-token text pair either.
+  const perToken = (unit: string | undefined) => unit === undefined || unit === "token";
+  if (output === undefined || !perToken(input?.unit) || !perToken(output.unit)) return undefined;
   if (input === undefined || output === undefined) {
     throw new Error("v1 cost needs text input and output prices");
   }
@@ -152,9 +185,11 @@ function costV2ToV1(cost: CostV2) {
   const contextTiers = new Map<number, Record<string, unknown>>();
   const tier = (when: CostWhenV2) => {
     const keys = Object.keys(when);
-    const size = keys.length === 1 ? (when.context as { gt?: unknown } | undefined)?.gt : undefined;
+    // A v1 tier only has the size where its band starts, so `gt` and `gte` both map to it.
+    const context = keys.length === 1 ? (when.context as { gt?: unknown; gte?: unknown } | undefined) : undefined;
+    const size = context?.gt ?? context?.gte;
     if (typeof size !== "number") {
-      throw new Error(`v1 cost tiers only support { context: { gt } }, got ${JSON.stringify(when)}`);
+      throw new Error(`v1 cost tiers only support { context: { gt | gte } }, got ${JSON.stringify(when)}`);
     }
     let entry = contextTiers.get(size);
     if (entry === undefined) {
@@ -163,7 +198,7 @@ function costV2ToV1(cost: CostV2) {
     }
     return entry;
   };
-  for (const override of input.overrides ?? []) {
+  for (const override of (input.overrides ?? []).filter(isV1Tier)) {
     Object.assign(
       tier(override.when),
       withoutUndefined({
@@ -173,7 +208,7 @@ function costV2ToV1(cost: CostV2) {
       }),
     );
   }
-  for (const override of output.overrides ?? []) {
+  for (const override of (output.overrides ?? []).filter(isV1Tier)) {
     Object.assign(
       tier(override.when),
       withoutUndefined({ output: override.price, reasoning: override.reasoning }),
@@ -191,6 +226,12 @@ function costV2ToV1(cost: CostV2) {
     output_audio: cost.audio?.output?.price,
     tiers: tiers.length > 0 ? tiers : undefined,
   });
+}
+
+// v1 prices only vary by context, so overrides on other conditions (service tier,
+// region…) stay v2-only, like multipliers.
+function isV1Tier(override: { when: CostWhenV2 }) {
+  return Object.keys(override.when).every((key) => key === "context");
 }
 
 // v1 has one cache write price: the first TTL listed (the provider's default).

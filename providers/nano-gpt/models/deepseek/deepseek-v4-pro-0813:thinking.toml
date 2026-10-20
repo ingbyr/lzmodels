@@ -1,5 +1,6 @@
 base_model = "deepseek/deepseek-v4-pro-0813"
 name = "DeepSeek V4 Pro 0813 Thinking"
+structured_output = true
 
 [[reasoning_options]]
 type = "effort"

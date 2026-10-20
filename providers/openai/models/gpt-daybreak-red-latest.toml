@@ -6,6 +6,7 @@ name = "Daybreak Red"
 description = "Alias for advanced cybersecurity models for authorized vulnerability research and security testing"
 
 [capabilities]
+tools = { supported = true, updates = true }
 reasoning = { supported = true, effort = ["none", "low", "medium", "high", "xhigh", "max"] }
 structured_output = true
 system_updates = true

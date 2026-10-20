@@ -3,7 +3,8 @@ import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { mergeDeep } from "remeda";
 import { z } from "zod";
 
-import { AuthoredModel, AuthoredModelShape, ModelMetadata } from "../schema.js";
+import { AuthoredModel, AuthoredModelShape, ModelMetadata, type Model, type Provider } from "../schema.js";
+import { resolveProtocol } from "../generate-v2.js";
 import {
   formatModelV2,
   multiplierModes,
@@ -128,6 +129,8 @@ export interface SyncProvider<SourceModel> {
     context: {
       existing(id: string): ExistingModel | undefined;
       authored(id: string): ExistingModel | undefined;
+      /** The existing file's TOML when it is a v2 file. */
+      v2?(id: string): Record<string, unknown> | undefined;
     },
   ): {
     id: string;
@@ -139,7 +142,18 @@ export interface SyncProvider<SourceModel> {
      * authoritativeHeaders is enabled.
      */
     header?: string;
-  } | undefined;
+  } | SyncedV2Model | undefined;
+}
+
+/**
+ * A model written straight as a v2 file, for data v1 fields can't carry (media
+ * model types, per-unit prices, API protocols). `v2` is the file body, written
+ * as is; existing header comments win over `header`, as for other models.
+ */
+export interface SyncedV2Model {
+  id: string;
+  v2: Record<string, unknown>;
+  header?: string;
 }
 
 export interface SyncResult {
@@ -297,6 +311,7 @@ export async function syncProvider<SourceModel>(
     content: string;
     header: string;
   }>();
+  const desiredV2 = new Map<string, { content: string }>();
   const caseNormalizedDesiredPaths = new Map<string, string>();
   const desiredMetadata = new Map<string, { model: z.infer<typeof ModelMetadata>; content: string }>();
   const skippedRemote: string[] = [];
@@ -312,6 +327,9 @@ export async function syncProvider<SourceModel>(
         },
         authored(id) {
           return existing.get(`${id}.toml`)?.authored;
+        },
+        v2(id) {
+          return existing.get(`${id}.toml`)?.v2;
         },
       });
     } catch (error) {
@@ -343,6 +361,17 @@ export async function syncProvider<SourceModel>(
       );
     }
     caseNormalizedDesiredPaths.set(relativePath.toLowerCase(), relativePath);
+
+    if ("v2" in translated) {
+      // Validates the file the same way readers will translate it.
+      modelV2ToV1({ ...translated.v2, id: translated.id }, { provider: provider.id, path: relativePath });
+      const translatedHeader = translated.header === undefined ? "" : leadingComments(translated.header);
+      const header = provider.authoritativeHeaders
+        ? translatedHeader
+        : existing.get(relativePath)?.header || translatedHeader;
+      desiredV2.set(relativePath, { content: header + formatModelV2(translated.v2) });
+      continue;
+    }
 
     if (translated.metadata !== undefined) {
       const parsedMetadata = ModelMetadata.safeParse({
@@ -391,7 +420,10 @@ export async function syncProvider<SourceModel>(
       : preserveDescription(withReasoningOptions, existing.get(relativePath)?.authored);
     const parsed = SyncedAuthoredModel.safeParse(stripUndefined({
       id: translated.id,
-      ...preserveType(withDescription, existing.get(relativePath)?.authored),
+      ...preserveStructuredOutput(
+        preserveType(withDescription, existing.get(relativePath)?.authored),
+        existing.get(relativePath)?.authored,
+      ),
     }));
     if (!parsed.success) {
       parsed.error.cause = { provider: provider.id, path: relativePath };
@@ -474,6 +506,7 @@ export async function syncProvider<SourceModel>(
             undefined,
             withBaseModalities(file.model, modelMetadata ?? {}),
             v2Notices,
+            await newModelProtocol(provider.modelsDir, file.model),
           ) ?? file.content
         : file.content;
       files.push({ status: "created", path: filePath });
@@ -545,9 +578,32 @@ export async function syncProvider<SourceModel>(
     }
   }
 
+  for (const [relativePath, file] of desiredV2) {
+    const filePath = await safeWritePath(provider.modelsDir, relativePath, true);
+    const current = existing.get(relativePath);
+    if (current !== undefined) {
+      if (
+        current.text === file.content
+        || (current.symlink && provider.preserveSymlinks)
+        || options.newOnly
+      ) {
+        unchanged++;
+        continue;
+      }
+    }
+    files.push({ status: current === undefined ? "created" : "updated", path: filePath });
+    if (options.dryRun) {
+      console.log(`Would ${current === undefined ? "create" : "update"} ${relativePath}`);
+    } else {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      if (await isSymlink(filePath)) await rm(filePath, { force: true });
+      await Bun.write(filePath, file.content);
+    }
+  }
+
   const missingLocal: string[] = [];
   for (const relativePath of new Set([...existing.keys(), ...brokenSymlinks])) {
-    if (desired.has(relativePath)) continue;
+    if (desired.has(relativePath) || desiredV2.has(relativePath)) continue;
     if (missingRemote.has(relativePath.slice(0, -5))) {
       unchanged++;
       continue;
@@ -631,6 +687,7 @@ function v2Content(
   before: ExistingModel | undefined,
   model: z.infer<typeof SyncedAuthoredModel>,
   notices: string[],
+  protocol?: string,
 ) {
   const { id, ...synced } = model;
   try {
@@ -639,7 +696,7 @@ function v2Content(
       : multiplierModes(doc, before, synced);
     const after = withoutModeCosts(synced, carried);
     const next = doc === undefined || before === undefined
-      ? providerModelToV2(after)
+      ? providerModelToV2(after, protocol)
       : patchModelV2(doc, withoutModeCosts(before, carried), after);
     const content = header + formatModelV2(next);
     const translated = modelV2ToV1(
@@ -655,6 +712,20 @@ function v2Content(
     console.warn(notice);
     return undefined;
   }
+}
+
+// A new v2 file puts `provider` and `interleaved` fields under the model's API
+// protocol, resolved from provider.toml the same way migrate-v2 does.
+async function newModelProtocol(modelsDir: string, model: z.infer<typeof SyncedAuthoredModel>) {
+  const file = Bun.file(path.join(path.dirname(modelsDir), "provider.toml"));
+  if (!(await file.exists())) return undefined;
+  const provider = {
+    ...(Bun.TOML.parse(await file.text()) as Record<string, unknown>),
+    id: path.basename(path.dirname(modelsDir)),
+  } as unknown as Provider;
+  const shape = "provider" in model ? model.provider?.shape : undefined;
+  const npm = ("provider" in model ? model.provider?.npm : undefined) ?? provider.npm;
+  return resolveProtocol(model as unknown as Model, provider, npm, shape);
 }
 
 // v2 files list both modality sides, but a synced base_model override only lists
@@ -696,6 +767,13 @@ export function preserveBaseModel(model: SyncedModel, existing: ExistingModel | 
 export function preserveType(model: SyncedModel, existing: ExistingModel | undefined): SyncedModel {
   if (model.type !== undefined || existing?.type === undefined) return model;
   return { ...model, type: existing.type } as SyncedModel;
+}
+
+// Lab files no longer carry structured_output (it is per host in v2), so a
+// curated host value is kept unless the provider reports one.
+export function preserveStructuredOutput(model: SyncedModel, existing: ExistingModel | undefined): SyncedModel {
+  if (model.structured_output !== undefined || existing?.structured_output === undefined) return model;
+  return { ...model, structured_output: existing.structured_output } as SyncedModel;
 }
 
 export function preserveDescription(model: SyncedModel, existing: ExistingModel | undefined): SyncedModel {
@@ -761,6 +839,7 @@ async function readExisting(modelsDir: string) {
     authored: ExistingModel;
     toml: ExistingModel;
     header: string;
+    text: string;
     symlink: boolean;
     v2: Record<string, unknown> | undefined;
   }>();
@@ -798,7 +877,7 @@ async function readExisting(modelsDir: string) {
       ? authored
       : resolveBaseModel(authored, modelMetadata ?? {}, filePath);
 
-    existing.set(file, { authored, toml, header: leadingComments(text), symlink, v2 });
+    existing.set(file, { authored, toml, header: leadingComments(text), text, symlink, v2 });
   }
 
   return { models: existing, brokenSymlinks, modelMetadata };

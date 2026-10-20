@@ -52,6 +52,7 @@ export async function generateV2(
   for await (const providerPath of scanTomls(providersDir, "*/provider.toml")) {
     const providerID = path.basename(path.dirname(providerPath));
     if (IGNORED_PROVIDERS.has(providerID)) continue;
+    if ((await readToml(providerPath)).v1_alias !== undefined) continue;
     const provider = await loadProviderV2(providerPath, baseModels, labsV2);
     const nameKey = provider.name.toLowerCase();
     const existingID = nameToProviderID.get(nameKey);
@@ -497,7 +498,7 @@ function toApiV2(model: Model, provider: Provider): ApiV2 {
   return { [protocol]: entry } as ApiV2;
 }
 
-function resolveProtocol(
+export function resolveProtocol(
   model: Model,
   provider: Provider,
   npm: string,

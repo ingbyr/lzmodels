@@ -232,7 +232,7 @@ Cloudflare Workers AI is implemented in `packages/core/src/sync/providers/cloudf
 - Cloudflare AI Gateway is implemented in `packages/core/src/sync/providers/cloudflare-ai-gateway.ts`.
 - Source endpoints: `GET /accounts/{id}/ai/catalog/models` for model availability, context limits, and pricing, plus `GET /accounts/{id}/ai/catalog/models/{model}/schema` for reasoning controls exposed by compatible schemas.
 - Required auth: `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`, or the production-token aliases documented in the provider README for local runs. The hourly workflow uses the canonical secret names.
-- The sync manages proxied third-party text-generation models only. Workers AI `@cf/...` models remain under `providers/cloudflare-workers-ai`.
+- The sync manages proxied third-party models. Text-generation rows become normal model files. `Text-to-Speech` and `Automatic Speech Recognition` rows become v2-only files (`v2_only = true`) on the REST API's `POST /ai/run` route, with per-character, per-minute or per-token costs. Image and video rows aren't synced yet (follow-up #10662); music generation, image-to-document and `websocket` rows are left out on purpose. Workers AI `@cf/...` models remain under `providers/cloudflare-workers-ai`.
 - `providers/cloudflare-ai-gateway/curation.toml` supplies base-model mappings, live-tested reasoning controls, structured-output support, limit overrides, and intentional skips that the catalog cannot express authoritatively.
 - New catalog entries without canonical lab metadata or required reasoning controls fail closed instead of generating incomplete TOMLs.
 
@@ -399,8 +399,11 @@ Requesty is implemented in `packages/core/src/sync/providers/requesty.ts`.
 
 - Run it with `bun models:sync requesty` or `bun requesty:sync`.
 - Source endpoint: `https://router.requesty.ai/v1/models/managed`; no auth required (the managed catalog is public).
-- The endpoint is the sole source of truth. `preserveBaseModels` and `preserveDescriptions` are both `false` so an upstream correction always wins over a previously committed value; local TOMLs are never read back into the translation.
-- Managed IDs are bare (`claude-opus-4-7`) or region-pinned (`gpt-5.4@eu`) rather than OpenRouter-shaped, so they resolve through `resolveModelMetadataBaseModel` after the `@<region>` qualifier is stripped. Every model emits `base_model` plus provider-specific overrides only.
+- The endpoint is the source of truth for prices, limits and capability flags. `preserveBaseModels` and `preserveDescriptions` are both `false`, so an upstream correction wins over a previously committed value. The translation reads two things back from the existing file:
+  - `base_model`, but only when `resolveRequestyBaseModel` has no match for the ID. This keeps a route linked to its lab by hand (e.g. `seed-1.8` → `bytedance-seed/seed-1-8`). A hand-linked file also keeps a curated `name` (e.g. `inkling-256k` → "Inkling 256K"); it is dropped when it equals the lab's.
+  - A curated `status`. The catalog's `retires` date is not synced, so `status = "deprecated"` is set by hand once a route retires.
+- A catalog `max_output_tokens` of 0 means unknown. A linked file then inherits the lab's `limit.output` instead of the context-window fallback, unless the lab's output exceeds the context the route serves (then the context is the cap).
+- Managed IDs are bare (`claude-opus-4-7`) or region-pinned (`gpt-5.4@eu`) rather than OpenRouter-shaped, so they resolve through `resolveModelMetadataBaseModel` after the `@<region>` qualifier is stripped. Resolved and hand-linked models emit `base_model` plus provider-specific overrides only; unmatched IDs are written as standalone files.
 - Anthropic files `.0` releases with an explicit `-0` (`claude-sonnet-4-0.toml`) while later point releases drop it, so bare `claude-<tier>-<major>` IDs retry against the `-0` filename.
 - Region variants are written as separate models: `gpt-5.4` and `gpt-5.4@eu` are distinct files that share a `base_model` and differ only in served pricing and limits.
 - Prices are per-token USD and are converted to per-1M-token numbers. `pricing[]` bands become `cost.tiers`, with the first band as the flat `cost`. Price fields are nullable upstream, so a route quoting no prices gets no `[cost]` section rather than a fabricated zero.

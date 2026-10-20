@@ -4,6 +4,7 @@
 # (price listing: https://openrouter.ai/api/v1/models/x-ai/grok-4.3/endpoints, accessed 2026-10-16).
 # Context tiers start at 200,000 prompt tokens.
 base_model = "xai/grok-4.3"
+structured_output = true
 reasoning_options = [{ type = "effort", values = ["none", "low", "medium", "high"] }]
 
 [interleaved]

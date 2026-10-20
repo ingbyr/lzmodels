@@ -1,3 +1,4 @@
+# tools.updates: tool_addition/tool_removal blocks (inline-tools-2026-09-15) keep the cache.
 schema = 2
 name = "Claude Opus 4.8"
 description = "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents"
@@ -11,7 +12,7 @@ input = ["text", "image/jpeg", "image/png", "image/gif", "image/webp", "applicat
 output = ["text"]
 
 [capabilities]
-tools = { supported = true }
+tools = { supported = true, updates = true }
 reasoning = { supported = true, effort = ["low", "medium", "high", "xhigh", "max"] }
 structured_output = true
 temperature = false

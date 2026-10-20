@@ -9,6 +9,7 @@
 # Text only, although the lab entry lists image: the same request carrying an image_url
 # part failed twice with "Provider returned error" while the text-only control succeeded.
 base_model = "xai/grok-4.6"
+structured_output = true
 attachment = false
 
 [[reasoning_options]]

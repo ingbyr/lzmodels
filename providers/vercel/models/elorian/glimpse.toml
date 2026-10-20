@@ -1,25 +1,27 @@
+# Modalities: generic image kept, Elorian publishes no image format list for Glimpse
+# Mid-conversation (@ai-sdk/gateway): per-turn effort and tool changes exist only for Anthropic models on this API. system_updates left unset: live cache results on the default route were inconclusive.
+schema = 2
 name = "Glimpse"
 description = "Multimodal reasoning model for visual analysis, planning, and tool use"
-release_date = "2026-10-16"
-last_updated = "2026-10-16"
-attachment = true
-reasoning = true
-tool_call = false
 open_weights = false
+release_date = "2026-10-16"
 
-[[reasoning_options]]
-type = "effort"
-values = ["low", "medium", "xhigh"]
+[modalities]
+input = ["text", "image"]
+output = ["text"]
 
-[cost]
-input = 0.6
-output = 3
-cache_read = 0.06
+[capabilities]
+tools = { supported = false }
+reasoning = { supported = true, effort = ["low", "medium", "xhigh"] }
+effort_updates = false
 
 [limit]
 context = 220_000
 output = 4_096
 
-[modalities]
-input = ["text", "image"]
-output = ["text"]
+[cost.text.input]
+price = 0.6
+cache = { read = 0.06 }
+
+[cost.text.output]
+price = 3
