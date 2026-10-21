@@ -4,6 +4,7 @@
 //   bun packages/core/script/migrate-v2.ts lab <lab-id>
 //   bun packages/core/script/migrate-v2.ts provider <provider-id>
 
+import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -15,6 +16,7 @@ import {
 } from "../src/model-file-v2.js";
 import { resolveProtocol } from "../src/generate-v2.js";
 import { ModelMetadata, type Model, type Provider } from "../src/schema.js";
+import { findComments } from "../src/toml-comments.js";
 import { isSchemaV2, labModelV2ToV1, modelV2ToV1, readLabModel } from "../src/translate.js";
 
 const root = path.join(import.meta.dirname, "..", "..", "..");
@@ -51,6 +53,20 @@ for await (const file of new Bun.Glob("**/*.toml").scan({ cwd: dir, absolute: tr
 }
 console.log(`Migrated ${migrated} files in ${path.relative(root, dir)}`);
 
+// The scan above skips symlinked files. They share their target's file, which has
+// to be migrated with the target's provider, so list the ones still on v1.
+const v1Links: string[] = [];
+for await (const file of new Bun.Glob("**/*.toml").scan({ cwd: dir, absolute: true, followSymlinks: true })) {
+  if (!(await lstat(file)).isSymbolicLink()) continue;
+  const target = await realpath(file);
+  if (isSchemaV2(Bun.TOML.parse(await Bun.file(target).text()) as Record<string, unknown>)) continue;
+  v1Links.push(`${path.relative(root, file)} -> ${path.relative(root, target)}`);
+}
+if (v1Links.length > 0) {
+  console.error(`Symlinks to v1 files (migrate the target's lab or provider):\n  ${v1Links.join("\n  ")}`);
+  process.exitCode = 1;
+}
+
 function migrateLab(text: string, toml: Record<string, unknown>, modelID: string) {
   const before = ModelMetadata.parse({ ...toml, id: modelID });
   const next = formatLabModel(text, before);
@@ -65,9 +81,14 @@ function migrateLab(text: string, toml: Record<string, unknown>, modelID: string
 }
 
 function migrateProvider(text: string, toml: Record<string, unknown>, modelID: string) {
-  const { header, body, tail } = splitFile(text);
-  if (body.some((line) => line.trim().startsWith("#")) || tail.length > 0) {
-    throw new Error(`${modelID}: comments or raw tables outside the header would be lost`);
+  const { header, tail } = splitFile(text, modelID);
+  if (tail.length > 0) {
+    throw new Error(`${modelID}: raw tables outside the header would be lost`);
+  }
+  // v1 effort `null` (or "null") means "reasoning off"; v2 has no such effort value.
+  const efforts = (toml.reasoning_options as { type: string; values?: unknown[] }[] | undefined) ?? [];
+  if (efforts.some((option) => option.type === "effort" && option.values?.some((v) => v === null || v === "null"))) {
+    throw new Error(`${modelID}: effort value null has no v2 form; write reasoning off as a toggle first`);
   }
   // v2 modalities replace the base's as a whole, so a v1 file that overrides only
   // `input` or `output` takes the other side from its base model.
@@ -108,10 +129,7 @@ function migrateProvider(text: string, toml: Record<string, unknown>, modelID: s
 }
 
 function formatLabModel(text: string, model: ModelMetadata) {
-  const { header, body, tail } = splitFile(text);
-  if (body.some((line) => line.trim().startsWith("#"))) {
-    throw new Error(`${model.id}: comments outside the header would be lost`);
-  }
+  const { header, tail } = splitFile(text, model.id);
   for (const field of ["release_date", "open_weights", "modalities", "limit"] as const) {
     if (model[field] === undefined) throw new Error(`${model.id}: missing ${field}`);
   }
@@ -180,7 +198,7 @@ function limitLines(limit: { context?: number; input?: number; output?: number }
   return out;
 }
 
-function splitFile(text: string) {
+function splitFile(text: string, modelID: string) {
   const lines = text.split("\n");
   const header: string[] = [];
   for (const line of lines) {
@@ -194,7 +212,13 @@ function splitFile(text: string) {
   if (tail.some((line) => /^\[[^[]/.test(line))) {
     throw new Error("tables after [[benchmarks]], [[links]], or [[weights]]");
   }
-  return { header, body, tail };
+  // The body is rewritten from parsed data, so its comments move into the header.
+  const comments = findComments(body, header.length + 1).filter((comment) => comment.text !== "");
+  if (comments.length > 0) {
+    header.push(...comments.map((comment) => `# ${comment.key}: ${comment.text}`));
+    console.log(`${modelID}: moved ${comments.length} comment(s) into the header`);
+  }
+  return { header, tail };
 }
 
 const inline = formatTomlValue;

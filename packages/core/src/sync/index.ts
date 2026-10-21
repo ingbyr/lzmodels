@@ -7,9 +7,11 @@ import { AuthoredModel, AuthoredModelShape, ModelMetadata, type Model, type Prov
 import { resolveProtocol } from "../generate-v2.js";
 import {
   formatModelV2,
+  type InheritedFlags,
   multiplierModes,
   patchModelV2,
   providerModelToV2,
+  resolvedFlags,
   sameV1Model,
   withoutModeCosts,
 } from "../model-file-v2.js";
@@ -142,6 +144,18 @@ export interface SyncProvider<SourceModel> {
      * authoritativeHeaders is enabled.
      */
     header?: string;
+    /**
+     * v2 values the source states that v1 fields can't carry (e.g. a price per
+     * cache TTL), keyed by dotted path as in `base_model_omit`. Each replaces
+     * the value at its path in a v2 file after the v1 patch, and a v2 file is
+     * rewritten when one differs even if its v1 view is unchanged. A function
+     * maps the current value to the new one (undefined removes it), for v2 data
+     * that shares a field with v1 data, such as time-of-day price overrides
+     * next to context tiers.
+     */
+    v2Set?: Record<string, unknown>;
+    /** Source data the module skipped, listed with the sync's notices. */
+    notices?: string[];
   } | SyncedV2Model | undefined;
 }
 
@@ -310,6 +324,7 @@ export async function syncProvider<SourceModel>(
     model: z.infer<typeof SyncedAuthoredModel>;
     content: string;
     header: string;
+    v2Set?: Record<string, unknown>;
   }>();
   const desiredV2 = new Map<string, { content: string }>();
   const caseNormalizedDesiredPaths = new Map<string, string>();
@@ -317,6 +332,7 @@ export async function syncProvider<SourceModel>(
   const skippedRemote: string[] = [];
   const missingRemote = new Set<string>();
   const missingReasoning = new Map<string, string>();
+  const translateNotices: string[] = [];
 
   for (const sourceModel of sourceModels) {
     let translated: ReturnType<typeof provider.translateModel>;
@@ -344,6 +360,13 @@ export async function syncProvider<SourceModel>(
       const missingID = provider.missingModelID?.(sourceModel);
       if (missingID !== undefined) missingRemote.add(missingID);
       continue;
+    }
+
+    if ("notices" in translated) {
+      for (const notice of translated.notices ?? []) {
+        translateNotices.push(notice);
+        console.warn(notice);
+      }
     }
 
     const relativePath = `${translated.id}.toml`;
@@ -440,6 +463,7 @@ export async function syncProvider<SourceModel>(
       model: parsed.data,
       content: header + formatToml(parsed.data),
       header,
+      v2Set: translated.v2Set,
     });
   }
 
@@ -507,6 +531,8 @@ export async function syncProvider<SourceModel>(
             withBaseModalities(file.model, modelMetadata ?? {}),
             v2Notices,
             await newModelProtocol(provider.modelsDir, file.model),
+            undefined,
+            file.v2Set,
           ) ?? file.content
         : file.content;
       files.push({ status: "created", path: filePath });
@@ -529,7 +555,15 @@ export async function syncProvider<SourceModel>(
       modelMetadata ??= await readModelMetadata(provider.modelsDir);
       const model = withBaseModalities(file.model, modelMetadata);
       const headerChanged = provider.authoritativeHeaders && current.header !== file.header;
-      if (!headerChanged && sameV1Model(current.authored, model)) {
+      // `reasoning` and `tool_call` compare resolved against the lab, so a switch
+      // between inheriting the lab's value and overriding it is still a change.
+      const resolved = {
+        before: resolvedFlags(current.authored, baseMetadata(current.authored, modelMetadata)),
+        after: resolvedFlags(model, baseMetadata(model, modelMetadata)),
+      };
+      const sameFlags = resolved.before.reasoning === resolved.after.reasoning
+        && resolved.before.tool_call === resolved.after.tool_call;
+      if (!headerChanged && sameFlags && sameV1Model(current.authored, model) && hasV2Values(current.v2, file.v2Set)) {
         unchanged++;
         continue;
       }
@@ -540,6 +574,9 @@ export async function syncProvider<SourceModel>(
         current.authored,
         model,
         v2Notices,
+        undefined,
+        resolved,
+        file.v2Set,
       );
       if (content === undefined || options.newOnly) {
         unchanged++;
@@ -634,6 +671,7 @@ export async function syncProvider<SourceModel>(
   }
 
   const notices = [
+    ...translateNotices,
     ...v2Notices,
     ...missingReasoning.values(),
     ...provider.skippedNotice?.(skippedRemote) ?? [],
@@ -688,6 +726,8 @@ function v2Content(
   model: z.infer<typeof SyncedAuthoredModel>,
   notices: string[],
   protocol?: string,
+  resolved?: { before: InheritedFlags; after: InheritedFlags },
+  v2Set?: Record<string, unknown>,
 ) {
   const { id, ...synced } = model;
   try {
@@ -697,7 +737,8 @@ function v2Content(
     const after = withoutModeCosts(synced, carried);
     const next = doc === undefined || before === undefined
       ? providerModelToV2(after, protocol)
-      : patchModelV2(doc, withoutModeCosts(before, carried), after);
+      : patchModelV2(doc, withoutModeCosts(before, carried), after, resolved);
+    for (const [key, value] of Object.entries(v2Set ?? {})) setPath(next, key, value);
     const content = header + formatModelV2(next);
     const translated = modelV2ToV1(
       { ...(Bun.TOML.parse(content) as Record<string, unknown>), id },
@@ -714,6 +755,40 @@ function v2Content(
   }
 }
 
+// Whether a v2 file already holds every `v2Set` value.
+function hasV2Values(doc: Record<string, unknown>, v2Set: Record<string, unknown> | undefined) {
+  return Object.entries(v2Set ?? {}).every(([key, value]) => {
+    const current = getPath(doc, key);
+    return stable(current) === stable(v2Value(value, current));
+  });
+}
+
+function getPath(doc: Record<string, unknown>, key: string) {
+  return key.split(".").reduce<unknown>(
+    (node, part) => (node !== null && typeof node === "object" ? (node as Record<string, unknown>)[part] : undefined),
+    doc,
+  );
+}
+
+function v2Value(value: unknown, current: unknown) {
+  return typeof value === "function" ? value(structuredClone(current)) : value;
+}
+
+function setPath(doc: Record<string, unknown>, key: string, value: unknown) {
+  const parts = key.split(".");
+  const next = v2Value(value, getPath(doc, key));
+  let node = doc;
+  for (const part of parts.slice(0, -1)) {
+    if (node[part] === null || typeof node[part] !== "object") {
+      if (next === undefined) return;
+      node[part] = {};
+    }
+    node = node[part] as Record<string, unknown>;
+  }
+  if (next === undefined) delete node[parts.at(-1)!];
+  else node[parts.at(-1)!] = next;
+}
+
 // A new v2 file puts `provider` and `interleaved` fields under the model's API
 // protocol, resolved from provider.toml the same way migrate-v2 does.
 async function newModelProtocol(modelsDir: string, model: z.infer<typeof SyncedAuthoredModel>) {
@@ -726,6 +801,13 @@ async function newModelProtocol(modelsDir: string, model: z.infer<typeof SyncedA
   const shape = "provider" in model ? model.provider?.shape : undefined;
   const npm = ("provider" in model ? model.provider?.npm : undefined) ?? provider.npm;
   return resolveProtocol(model as unknown as Model, provider, npm, shape);
+}
+
+function baseMetadata(
+  model: Record<string, unknown>,
+  modelMetadata: Record<string, Record<string, unknown>>,
+) {
+  return typeof model.base_model === "string" ? modelMetadata[model.base_model] : undefined;
 }
 
 // v2 files list both modality sides, but a synced base_model override only lists

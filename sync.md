@@ -168,8 +168,11 @@ CrossModel is implemented in `packages/core/src/sync/providers/crossmodel.ts`.
 
 - Source endpoint: `https://www.crossmodel.ai/api/models`.
 - Pricing, context/output limits, modalities, and reasoning controls come from CrossModel's public catalog.
-- `structured_output` comes from `capabilities.json`; when that field is absent, the sync preserves an existing authored override.
-- Other intrinsic model facts remain inherited from the canonical `base_model` metadata.
+- `structured_output` comes from `capabilities.json` (documented `/v1/models` shape) or `capabilities.structured_output.json_schema` (the public catalog); when both are absent or null, the sync preserves an existing authored override.
+- `identity.release_stage = "deprecated"` sets `status = "deprecated"`; otherwise an existing status is kept.
+- `capabilities.context.caching = true` sets only `capabilities.cache.supported = true` in v2 files (CrossModel documents no mechanism or TTL). Authored `implicit` / `explicit` details are kept.
+- Effort lists are sorted low to high, because v2 compares them in order.
+- Intrinsic model facts (`knowledge`, dates, `family`, `open_weights`) are never synced; they stay inherited from the canonical `base_model` metadata. Display names are not synced either, so v1 names remain the lab's.
 
 ## Prime Inference Notes
 
@@ -179,6 +182,17 @@ CrossModel is implemented in `packages/core/src/sync/providers/crossmodel.ts`.
 - Sparse metadata, unresolved lab identities and missing or unknown reasoning controls are reported for manual follow-up. Existing files for those still-listed IDs are retained; no placeholder controls or lab facts are invented, and the sync does not automatically open issues for sparse upstream rows.
 - Models absent from the API or explicitly lacking tool/text support are removed. Empty, malformed and duplicate-ID inventories fail before writes. Internal/frontier namespaces, deployment-qualified IDs and uppercase namespaces are excluded; exact wire IDs are preserved on case-insensitive filesystems.
 - Cache prices are omitted when unavailable, including removal of stale cache rates. Unpublished input-token limits are omitted; generic `file` input does not imply PDF support. Reasoning options use the published per-model `reasoning_effort` values, including `none` when advertised.
+
+## EmpirioLabs Notes
+
+EmpirioLabs is implemented in `packages/core/src/sync/providers/empiriolabs.ts`.
+
+- Source endpoint: the public `https://api.empiriolabs.ai/v1/models`. Only `category = "text"` models without a `:` lane suffix are synced.
+- Prices, limits, modalities, `supported_parameters` reasoning controls (`enable_thinking`, `reasoning_effort`, `thinking_budget`) and display names come from the catalog. Effort lists are sorted low to high.
+- `structured_output` is `"json_schema"`, `"json_object"` or `"none"` (https://docs.empiriolabs.ai/compatibility.md); `"none"` syncs as false.
+- `deprecated = true` sets `status = "deprecated"`; otherwise an existing status is kept.
+- A `cache` or `prompt_cache` feature sets only `capabilities.cache.supported = true` in v2 files. Authored `implicit` / `explicit` details are kept.
+- `base_model` files never carry model facts (dates, `family`, `knowledge`, `open_weights`); they come from the lab. Only standalone files keep them.
 
 ## OpenRouter Notes
 
@@ -215,6 +229,10 @@ Merge Gateway is implemented in `packages/core/src/sync/providers/merge-gateway.
 - The canonical provider's available vendor route supplies pricing, limits, and capabilities. When it is unavailable, the sync matches Gateway's default resolver by selecting the active route with the lowest combined input and output price; the API's CMS-priority order breaks ties.
 - Canonical model IDs emit `base_model` references to model metadata when a matching `models/` entry exists.
 - Local models missing from the response are retained because API-key policy can affect catalog visibility.
+- `pricing.long_context` becomes a context tier; a null long-context rate keeps the base rate.
+- Routes whose `pricing.unit` isn't `per_token` (per second, image or character) report 0 per-token prices, so the sync writes no token price for them and the file's own unit price (e.g. `cost.audio.input` with `unit = "second"`) is kept by hand.
+- Effort values are written low to high. New files with a reasoning toggle get the `thinking.type` wire-path header.
+- `capabilities.cache` and the mid-conversation flags are hand-authored (see `providers/merge-gateway/provider.toml`); the catalog doesn't list a route's caching family.
 
 ## Cloudflare Workers AI Notes
 
@@ -232,7 +250,7 @@ Cloudflare Workers AI is implemented in `packages/core/src/sync/providers/cloudf
 - Cloudflare AI Gateway is implemented in `packages/core/src/sync/providers/cloudflare-ai-gateway.ts`.
 - Source endpoints: `GET /accounts/{id}/ai/catalog/models` for model availability, context limits, and pricing, plus `GET /accounts/{id}/ai/catalog/models/{model}/schema` for reasoning controls exposed by compatible schemas.
 - Required auth: `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`, or the production-token aliases documented in the provider README for local runs. The hourly workflow uses the canonical secret names.
-- The sync manages proxied third-party models. Text-generation rows become normal model files. `Text-to-Speech` and `Automatic Speech Recognition` rows become v2-only files (`v2_only = true`) on the REST API's `POST /ai/run` route, with per-character, per-minute or per-token costs. Image and video rows aren't synced yet (follow-up #10662); music generation, image-to-document and `websocket` rows are left out on purpose. Workers AI `@cf/...` models remain under `providers/cloudflare-workers-ai`.
+- The sync manages proxied third-party models. Text-generation rows become normal model files. `Text-to-Speech`, `Automatic Speech Recognition`, image (`Text-to-Image`, `Image-to-Image`) and video (`Text-to-Video`, `Image-to-Video`, `video-to-video`) rows become v2-only files (`v2_only = true`) on the REST API's `POST /ai/run` route, with per-character, per-minute, per-image, per-megapixel, per-second or per-token costs. Music generation, image-to-document and `websocket` rows are left out on purpose, and image/video ids without a lab file stay in `skip`. Workers AI `@cf/...` models remain under `providers/cloudflare-workers-ai`.
 - `providers/cloudflare-ai-gateway/curation.toml` supplies base-model mappings, live-tested reasoning controls, structured-output support, limit overrides, and intentional skips that the catalog cannot express authoritatively.
 - New catalog entries without canonical lab metadata or required reasoning controls fail closed instead of generating incomplete TOMLs.
 

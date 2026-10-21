@@ -4,7 +4,7 @@
 import { toCostV2 } from "./generate-v2.js";
 import { ReasoningOption } from "./schema.js";
 import type { CostV2, CostWhenV2, InputCostV2, OutputCostV2 } from "./schema-v2.js";
-import { roundPrice } from "./translate.js";
+import { roundPrice, toV1Modalities, toV1Modality, toV1Shape } from "./translate.js";
 
 type Doc = Record<string, any>;
 
@@ -99,23 +99,41 @@ function apiEntry(model: Record<string, any>, fallback: string | undefined) {
   if (provider?.npm !== undefined) entry.sdk = { aisdk: provider.npm };
   if (interleaved === true) entry.compatibility = { replay_reasoning: true };
   else if (interleaved !== undefined) entry.compatibility = { reasoning_field: interleaved.field };
+  // A shape v1 would drop as the SDK's default stays as the legacy field.
+  if (shape !== undefined && toV1Shape(protocol, provider?.npm) === undefined) entry.legacy_shape = shape;
   return { [protocol]: entry };
 }
 
 // Applies a v1 change (`before` → `after`) to an existing v2 file. Fields whose
 // v1 view didn't change keep their v2 data (MIME modalities, cache TTLs, extra
 // capabilities, multipliers); changed prices are updated in place.
-export function patchModelV2(doc: Doc, before: Record<string, any>, after: Record<string, any>): Doc {
+export function patchModelV2(
+  doc: Doc,
+  before: Record<string, any>,
+  after: Record<string, any>,
+  resolved?: { before: InheritedFlags; after: InheritedFlags },
+): Doc {
   const next = providerModelToV2(after, Object.keys(doc.api ?? {})[0]);
-  // `reasoning` and `tool_call` may be inherited from the lab on one side, as in sameV1Model.
+  // `reasoning` and `tool_call` may be inherited from the lab on one side, as in
+  // sameV1Model. With the lab's values (`resolved`), they compare resolved.
   const same = (...keys: string[]) =>
-    keys.every(
-      (key) =>
-        ((key === "reasoning" || key === "tool_call") && (before[key] === undefined || after[key] === undefined)) ||
-        stable(before[key]) === stable(after[key]),
-    );
+    keys.every((key) => {
+      if (key === "reasoning" || key === "tool_call") {
+        if (resolved !== undefined) return resolved.before[key] === resolved.after[key];
+        if (before[key] === undefined || after[key] === undefined) return true;
+      }
+      return stable(before[key]) === stable(after[key]);
+    });
 
-  if (same("modalities") && doc.modalities !== undefined) next.modalities = doc.modalities;
+  if (doc.modalities !== undefined) {
+    if (same("modalities")) next.modalities = doc.modalities;
+    else if (next.modalities !== undefined) {
+      next.modalities = {
+        input: mergeModalities(doc.modalities.input, next.modalities.input),
+        output: mergeModalities(doc.modalities.output, next.modalities.output),
+      };
+    }
+  }
 
   const capabilities: Doc = { ...doc.capabilities };
   const owned: Array<[string, string[]]> = [
@@ -152,6 +170,17 @@ export function patchModelV2(doc: Doc, before: Record<string, any>, after: Recor
   if (doc.metadata !== undefined) next.metadata = doc.metadata;
   if (doc.v2_only !== undefined) next.v2_only = doc.v2_only;
   return next;
+}
+
+// A synced modality list in the synced kinds and order, keeping the file's
+// exact formats (`image/png`, `application/pdf`) for each kind it already has.
+function mergeModalities(current: string[] | undefined, synced: string[]) {
+  if (current === undefined) return synced;
+  if (stable(toV1Modalities(current)) === stable(toV1Modalities(synced))) return current;
+  return synced.flatMap((value) => {
+    const own = current.filter((item) => toV1Modality(item) === toV1Modality(value));
+    return own.length > 0 ? own : [value];
+  });
 }
 
 // Modes priced by a multiplier in the v2 file whose v1 price sync only carried
@@ -261,6 +290,22 @@ function sameTier(a: unknown, b: unknown) {
 // Compares two v1 models the way v2 files can express them: v2 always states
 // `reasoning` and `tool_call` when it sets them and derives `attachment`, while v1
 // files may inherit or omit them.
+export interface InheritedFlags {
+  reasoning?: boolean;
+  tool_call?: boolean;
+}
+
+// A v1 model's `reasoning` and `tool_call`, falling back to its base model's.
+export function resolvedFlags(
+  model: Record<string, any>,
+  base: Record<string, any> | undefined,
+): InheritedFlags {
+  return {
+    reasoning: model.reasoning ?? base?.reasoning,
+    tool_call: model.tool_call ?? base?.tool_call,
+  };
+}
+
 export function sameV1Model(a: Record<string, any>, b: Record<string, any>) {
   const left = normalizeV1(a);
   const right = normalizeV1(b);

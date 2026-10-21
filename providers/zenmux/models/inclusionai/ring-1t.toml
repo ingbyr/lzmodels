@@ -1,25 +1,30 @@
+# Retired: absent from GET https://zenmux.ai/api/v1/models and its model page shows Sunset (2026-10-21).
+# Cache: https://docs.zenmux.ai/guide/advanced/prompt-cache.html (implicit: OpenAI, DeepSeek, Grok, Gemini, Qwen, Kimi, GLM, Ling/Ring; cache_control: Claude, Gemini, Qwen).
+schema = 2
 name = "Ring-1T"
 description = "Reasoning model for deliberate analysis, multi-step problem solving, and tool use"
-release_date = "2025-10-12"
-last_updated = "2025-10-12"
-attachment = false
-reasoning = true
-reasoning_options = []
-temperature = true
-tool_call = true
-knowledge = "2025-01-01"
 open_weights = false
+knowledge = "2025-01-01"
+release_date = "2025-10-12"
 status = "deprecated"
 
-[cost]
-input = 0.56
-output = 2.24
-cache_read = 0.11
+[modalities]
+input = ["text"]
+output = ["text"]
+
+[capabilities]
+tools = { supported = true }
+reasoning = { supported = true }
+temperature = true
+cache = { supported = true, implicit = true }
 
 [limit]
 context = 128_000
 output = 64_000
 
-[modalities]
-input = ["text"]
-output = ["text"]
+[cost.text.input]
+price = 0.56
+cache = { read = 0.11 }
+
+[cost.text.output]
+price = 2.24

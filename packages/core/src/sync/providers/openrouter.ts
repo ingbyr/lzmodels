@@ -11,11 +11,15 @@ import type { ExistingModel, SyncProvider, SyncedFullModel, SyncedModel } from "
 // modality `decisions`) are returned only when requested explicitly.
 // https://openrouter.ai/docs/guides/community/jev
 const API_ENDPOINT = "https://openrouter.ai/api/v1/models?output_modalities=text,decisions";
-// Speech, transcription, embedding and rerank models are listed only when
-// requested by output modality. Image and video models aren't synced yet: their
-// prices live in the per-endpoint image API and the video SKU list.
+// Speech, transcription, embedding, rerank, image and video models are listed only
+// when requested by output modality. Image prices come from each model's Images API
+// endpoints, video prices from the video models list.
 // https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties
-const MEDIA_API_ENDPOINT = "https://openrouter.ai/api/v1/models?output_modalities=speech,transcription,embeddings,rerank";
+const MEDIA_API_ENDPOINT = "https://openrouter.ai/api/v1/models?output_modalities=speech,transcription,embeddings,rerank,image,video";
+// https://openrouter.ai/docs/guides/overview/multimodal/image-generation#per-endpoint-records
+const IMAGE_ENDPOINTS_URL = (id: string) => `https://openrouter.ai/api/v1/images/models/${id}/endpoints`;
+// https://openrouter.ai/docs/guides/overview/multimodal/video-generation#via-the-video-models-api
+const VIDEO_MODELS_ENDPOINT = "https://openrouter.ai/api/v1/videos/models";
 const MODELS_DIR = path.join(import.meta.dirname, "..", "..", "..", "..", "..", "models");
 const modelMetadataByID = new Map<string, Record<string, unknown>>();
 const modelMetadataFilesByProvider = new Map<string, Set<string>>();
@@ -100,6 +104,25 @@ export function openrouterDirsForMetadataLab(metadata: string): string[] {
   return dirs.length > 0 ? dirs : [metadata];
 }
 
+const OpenRouterImageEndpoint = z.object({
+  provider_slug: z.string().optional(),
+  supported_parameters: z.record(z.object({ values: z.array(z.string()).optional() }).passthrough()).optional(),
+  pricing: z.array(z.object({
+    billable: z.string(),
+    unit: z.string(),
+    cost_usd: z.number(),
+    variant: z.string().optional(),
+  })),
+});
+
+export const OpenRouterImageEndpoints = z.object({
+  endpoints: z.array(OpenRouterImageEndpoint),
+});
+
+export const OpenRouterVideoModels = z.object({
+  data: z.array(z.object({ id: z.string(), pricing_skus: z.record(z.string()).nullable().optional() }).passthrough()),
+});
+
 export const OpenRouterModel = z.object({
   id: z.string(),
   name: z.string(),
@@ -111,6 +134,7 @@ export const OpenRouterModel = z.object({
     input_modalities: z.array(z.string()),
     output_modalities: z.array(z.string()),
   }),
+  // Passthrough: catalogCost reports price keys it doesn't know.
   pricing: z.object({
     prompt: z.string(),
     completion: z.string(),
@@ -120,19 +144,31 @@ export const OpenRouterModel = z.object({
     internal_reasoning: z.string().optional(),
     input_cache_read: z.string().optional(),
     input_cache_write: z.string().optional(),
+    input_cache_write_1h: z.string().optional(),
+    image_output: z.string().optional(),
+    web_search: z.string().optional(),
+    request: z.string().optional(),
     overrides: z.array(z.object({
       min_prompt_tokens: z.number().optional(),
       prompt: z.string().optional(),
       completion: z.string().optional(),
       input_cache_read: z.string().optional(),
       input_cache_write: z.string().optional(),
+      // Time-of-day windows, checked by parseTimeWindow.
+      utc_days: z.unknown().optional(),
+      utc_start: z.unknown().optional(),
+      utc_end: z.unknown().optional(),
     }).passthrough()).optional(),
-  }),
+  }).passthrough(),
   top_provider: z.object({
     context_length: z.number().nullable(),
     max_completion_tokens: z.number().nullable(),
   }),
   supported_parameters: z.array(z.string()),
+  // Images API endpoint records, attached by fetchModels for image models.
+  image_endpoints: z.array(OpenRouterImageEndpoint).optional(),
+  // Video SKU prices from the video models list, attached by fetchModels for video models.
+  video_pricing_skus: z.record(z.string()).optional(),
   reasoning: z
     .object({
       mandatory: z.boolean(),
@@ -160,17 +196,29 @@ export const openrouter = {
     const headers = process.env.OPENROUTER_API_KEY
       ? { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` }
       : undefined;
-    const [text, media] = await Promise.all(
-      [API_ENDPOINT, MEDIA_API_ENDPOINT].map(async (url) => {
-        const response = await fetch(url, { headers });
-        if (!response.ok) {
-          throw new Error(`OpenRouter request failed: ${response.status} ${response.statusText}`);
-        }
-        return OpenRouterResponse.parse(await response.json());
-      }),
-    );
-    const ids = new Set(text!.data.map((model) => model.id));
-    return { data: [...text!.data, ...media!.data.filter((model) => !ids.has(model.id))] };
+    const get = async (url: string) => {
+      const response = await fetch(url, { headers });
+      if (!response.ok) {
+        throw new Error(`OpenRouter request failed: ${response.status} ${response.statusText}`);
+      }
+      return response.json();
+    };
+    const [text, media, videos] = await Promise.all([
+      get(API_ENDPOINT).then((raw) => OpenRouterResponse.parse(raw)),
+      get(MEDIA_API_ENDPOINT).then((raw) => OpenRouterResponse.parse(raw)),
+      get(VIDEO_MODELS_ENDPOINT).then((raw) => OpenRouterVideoModels.parse(raw)),
+    ]);
+    const ids = new Set(text.data.map((model) => model.id));
+    // Models that also output text (Gemini image models, routers) come from the text list.
+    const extra = media.data.filter((model) => !ids.has(model.id) && mediaType(model) !== undefined);
+    const skus = new Map(videos.data.map((model) => [model.id, model.pricing_skus ?? undefined]));
+    for (const model of extra) {
+      if (mediaType(model) === "video") model.video_pricing_skus = skus.get(model.id);
+    }
+    await Promise.all(extra.filter((model) => mediaType(model) === "image").map(async (model) => {
+      model.image_endpoints = OpenRouterImageEndpoints.parse(await get(IMAGE_ENDPOINTS_URL(model.id))).endpoints;
+    }));
+    return { data: [...text.data, ...extra] };
   },
   parseModels(raw) {
     // Temporarily skip batch routes (`*:batch`) — they are not catalog targets.
@@ -199,12 +247,18 @@ export const openrouter = {
       return authored === undefined ? undefined : { id: model.id, model: authored as SyncedModel };
     }
     const translated = buildOpenRouterModel(model, context.existing(model.id));
+    // Without a catalog price the file's cost is kept as is.
+    const catalog = price(model.pricing.prompt) === undefined || price(model.pricing.completion) === undefined
+      ? undefined
+      : catalogV2Set(model, context.v2?.(model.id));
     return {
       id: model.id,
       model: translated,
       header: translated.reasoning_options?.some((option) => option.type === "toggle")
         ? "# Toggle: reasoning.enabled = true|false\n# https://openrouter.ai/docs/guides/best-practices/reasoning-tokens\n"
         : undefined,
+      v2Set: catalog?.v2Set,
+      notices: catalog?.notices,
     };
   },
 } satisfies SyncProvider<OpenRouterModel>;
@@ -223,16 +277,18 @@ function isDecisionModel(model: OpenRouterModel) {
 }
 
 // ---------------------------------------------------------------------------
-// Speech, transcription, embedding and rerank models (v2-only files)
+// Speech, transcription, embedding, rerank and image models (v2-only files)
 // ---------------------------------------------------------------------------
 
-type MediaType = "speech" | "transcription" | "embedding" | "reranking";
+type MediaType = "speech" | "transcription" | "embedding" | "reranking" | "image" | "video";
 
 const MEDIA_TYPES: Record<string, MediaType> = {
   speech: "speech",
   transcription: "transcription",
   embeddings: "embedding",
   rerank: "reranking",
+  image: "image",
+  video: "video",
 };
 
 const BASE_URL = "https://openrouter.ai/api/v1";
@@ -245,11 +301,17 @@ const BASE_URL = "https://openrouter.ai/api/v1";
 // https://openrouter.ai/docs/api/api-reference/stt/create-transcription (POST /audio/transcriptions)
 // https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request (POST /embeddings)
 // https://openrouter.ai/docs/api/api-reference/rerank/submit-a-rerank-request (POST /rerank)
+// https://openrouter.ai/docs/guides/overview/multimodal/image-generation (POST /images; the OpenRouter
+// AI SDK provider's imageModel)
+// https://openrouter.ai/docs/guides/overview/multimodal/video-generation (POST /videos; the OpenRouter
+// AI SDK provider's videoModel)
 const MEDIA_APIS: Record<MediaType, { protocol: string; aisdk?: string }> = {
   speech: { protocol: "speech", aisdk: "@ai-sdk/openai" },
   transcription: { protocol: "transcriptions", aisdk: "@ai-sdk/openai" },
   embedding: { protocol: "embeddings", aisdk: "@openrouter/ai-sdk-provider" },
   reranking: { protocol: "rerank" },
+  image: { protocol: "images", aisdk: "@openrouter/ai-sdk-provider" },
+  video: { protocol: "videos", aisdk: "@openrouter/ai-sdk-provider" },
 };
 
 const MEDIA_HEADERS: Record<MediaType, string> = {
@@ -275,6 +337,21 @@ const MEDIA_HEADERS: Record<MediaType, string> = {
     "# and per-token prices), so only free routes get a price.",
     "# https://openrouter.ai/docs/api/api-reference/rerank/submit-a-rerank-request",
   ].join("\n"),
+  image: [
+    "# Synced from https://openrouter.ai/api/v1/models?output_modalities=image. Prices are the Images API",
+    "# endpoint pricing lines (/api/v1/images/models/{id}/endpoints): per image, per megapixel or per token.",
+    "# Resolution and quality tiers are overrides on the first line; a request that omits them is billed at",
+    "# the provider's default tier. No [cost] when a price has no CostV2 form (per-request or font fees,",
+    "# unlisted or per-job pricing).",
+    "# https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+  ].join("\n"),  video: [
+    "# Synced from https://openrouter.ai/api/v1/models?output_modalities=video. Prices are the pricing_skus of",
+    "# https://openrouter.ai/api/v1/videos/models: per second of output (cents_per_* / 100, duration_seconds_* in USD)",
+    "# or per video token (video_tokens_*). SKU qualifiers are overrides on the plain or first SKU: resolution,",
+    "# generate_audio (true by default for models with audio), mode (text-to-video, image-to-video, reference-to-video)",
+    "# and input_video. No [cost] when a SKU has no CostV2 form (minimum charge per generation, per megapixel-second).",
+    "# https://openrouter.ai/docs/guides/overview/multimodal/video-generation",
+  ].join("\n"),
 };
 
 // MIME types per OpenRouter's docs.
@@ -297,6 +374,8 @@ const MEDIA_DESCRIPTIONS: Record<MediaType, string> = {
   transcription: "Speech-to-text model",
   embedding: "Text embedding model",
   reranking: "Reranking model",
+  image: "Image generation model",
+  video: "Video generation model",
 };
 
 // OpenRouter IDs whose lab file has another name. Matching otherwise compares
@@ -314,6 +393,28 @@ const MEDIA_BASE_MODEL_OVERRIDES: Record<string, string> = {
   // of life on 2026-10-02 and is served by 2.0 (https://docs.x.ai/developers/release-notes).
   "x-ai/grok-voice-tts-1.0": "xai/grok-tts",
   "x-ai/grok-stt-1.0": "xai/grok-voice-transcribe-2.0",
+  // Krea serves Krea 3 on OpenRouter as K3 Edit (https://www.krea.ai/blog/introducing-krea-3).
+  "krea/k3-edit": "krea/krea-3",
+  "meta/muse-image": "meta/muse-image-1.0",
+  "qwen/qwen-image-3": "alibaba/qwen-image-3.0",
+  "qwen/qwen-image-3-pro": "alibaba/qwen-image-3.0-pro",
+  // Video models whose lab file uses the lab's API name.
+  "alibaba/wan-3.0": "alibaba/wan3.0-video",
+  "alibaba/wan-3.0-prime": "alibaba/wan3.0-video-prime",
+  "minimax/hailuo-3": "minimax/MiniMax-H3",
+  "minimax/hailuo-3-max": "minimax/MiniMax-H3-Max",
+  "minimax/hailuo-2.3": "minimax/MiniMax-Hailuo-2.3",
+  // Veo 3.1 on Vertex AI; the lab files carry the Gemini API model names.
+  "google/veo-3.1": "google/veo-3.1-generate-preview",
+  "google/veo-3.1-fast": "google/veo-3.1-fast-generate-preview",
+  "google/veo-3.1-lite": "google/veo-3.1-lite-generate-preview",
+};
+
+// OpenRouter prefixes of media labs that the chat prefix table doesn't cover. Kept separate so chat
+// models under these prefixes don't start resolving to new labs.
+const MEDIA_LAB_PREFIXES: Record<string, string> = {
+  bytedance: "bytedance-seed",
+  kwaivgi: "kuaishou",
 };
 
 // Transcription models whose pricing.prompt is per audio hour, not per second.
@@ -323,6 +424,211 @@ const MEDIA_BASE_MODEL_OVERRIDES: Record<string, string> = {
 // https://openrouter.ai/microsoft/mai-transcribe-2
 // https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/mai-transcribe-2-highest-quality-transcription-at-the-fastest-speed-and-lowest-c/4550972
 const HOURLY_TRANSCRIPTION = new Set(["microsoft/mai-transcribe-1.5", "microsoft/mai-transcribe-2"]);
+
+// https://openrouter.ai/docs/guides/overview/multimodal/image-generation (output_format)
+const IMAGE_OUTPUT: Record<string, string> = {
+  png: "image/png",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+};
+
+// Labs whose OpenRouter price lines are a floor: "Pricing is dynamic: cost is finalized per job at
+// completion based on billable processing, so it scales with reasoning effort, resolution, and editing
+// complexity" (https://openrouter.ai/sourceful/riverflow-v2.5-fast). A 1K Riverflow V2.5 Fast image
+// listed at $0.019 was billed $0.0318 (2026-10-20).
+const PER_JOB_IMAGE_PRICING = new Set(["sourceful"]);
+
+// Pricing variants that aren't a resolution or quality tier. Seedream 5.0 Pro lists a plain line and
+// `high_resolution`: a 1K request was billed the plain $0.045 and a 2K request $0.09 (2026-10-20).
+const IMAGE_VARIANT_CONDITIONS: Record<string, Record<string, Record<string, unknown>>> = {
+  "bytedance-seed/seedream-5-0-pro": { high_resolution: { resolution: { equals: "2K" } } },
+};
+
+const IMAGE_BILLABLES: Record<string, ["text" | "image", "input" | "output"]> = {
+  input_text: ["text", "input"],
+  input_image: ["image", "input"],
+  output_image: ["image", "output"],
+};
+
+const IMAGE_UNITS = new Set(["token", "image", "megapixel"]);
+
+// OpenRouter's `resolution` request values spell tiers with a capital K (1K, 1.5K, 2K, 4K); pixel
+// heights (768, 720p) stay as they are.
+function requestResolution(value: string) {
+  return value.endsWith("k") ? `${value.slice(0, -1)}K` : value;
+}
+
+// One modality price: per 1M tokens (no unit) or per unit, with its overrides when there are any.
+function unitPrice(unit: string, price: number, overrides: Array<{ when: Record<string, unknown>; price: number }>) {
+  return {
+    ...(unit === "token" ? {} : { unit }),
+    price,
+    ...(overrides.length > 0 ? { overrides } : {}),
+  };
+}
+
+// A tier variant as request conditions: `1k`/`1.5k`/`768` are the `resolution` values (1K, 1.5K, 768),
+// and `<quality>_<resolution>` adds `quality`.
+// https://openrouter.ai/docs/guides/overview/multimodal/image-generation#request-parameters
+export function imageVariantCondition(modelID: string, variant: string): Record<string, unknown> | undefined {
+  const special = IMAGE_VARIANT_CONDITIONS[modelID]?.[variant];
+  if (special !== undefined) return special;
+  const resolution = (value: string) =>
+    /^\d+(\.\d+)?k$/.test(value) || /^\d+$/.test(value) ? requestResolution(value) : undefined;
+  const tier = resolution(variant);
+  if (tier !== undefined) return { resolution: { equals: tier } };
+  const match = /^(low|medium|high)_(.+)$/.exec(variant);
+  const qualityTier = match === null ? undefined : resolution(match[2]!);
+  if (match === null || qualityTier === undefined) return undefined;
+  return { quality: { equals: match[1] }, resolution: { equals: qualityTier } };
+}
+
+// Image prices from the Images API endpoint records. Every line must map to a CostV2 price, or the
+// model gets no cost rather than a partial one.
+export function imageCost(model: OpenRouterModel) {
+  if (PER_JOB_IMAGE_PRICING.has(model.id.split("/")[0]!)) return undefined;
+  const endpoints = (model.image_endpoints ?? []).filter((endpoint) => endpoint.pricing.length > 0);
+  const lines = endpoints[0]?.pricing;
+  if (lines === undefined) return undefined;
+  // Several hosts with different prices can't be one price.
+  if (endpoints.some((endpoint) => JSON.stringify(endpoint.pricing) !== JSON.stringify(lines))) return undefined;
+
+  const groups = new Map<string, typeof lines>();
+  for (const line of lines) groups.set(line.billable, [...(groups.get(line.billable) ?? []), line]);
+  const cost: Record<string, Record<string, unknown>> = {};
+  for (const billable of Object.keys(IMAGE_BILLABLES)) {
+    const group = groups.get(billable);
+    if (group === undefined) continue;
+    groups.delete(billable);
+    const unit = group[0]!.unit;
+    if (!IMAGE_UNITS.has(unit) || group.some((line) => line.unit !== unit)) return undefined;
+    const value = (usd: number) => unit === "token" ? price(String(usd))! : roundPrice(usd);
+    const base = group.find((line) => line.variant === undefined) ?? group[0]!;
+    const overrides = [];
+    for (const line of group) {
+      if (line === base || value(line.cost_usd) === value(base.cost_usd)) continue;
+      const when = line.variant === undefined ? undefined : imageVariantCondition(model.id, line.variant);
+      if (when === undefined) return undefined;
+      overrides.push({ when, price: value(line.cost_usd) });
+    }
+    const [modality, direction] = IMAGE_BILLABLES[billable]!;
+    cost[modality] = {
+      ...cost[modality],
+      [direction]: unitPrice(unit, value(base.cost_usd), overrides),
+    };
+  }
+  // Reference, font or per-request fees have no CostV2 price.
+  return groups.size === 0 ? cost : undefined;
+}
+
+type VideoSku = { target: "output" | "image"; unit: "second" | "token" | "image"; price: number; when: Record<string, string | boolean> };
+
+const VIDEO_RESOLUTION = "(480p|720p|768p|1080p|2k|4k)";
+const VIDEO_MODES: Record<string, string> = {
+  text_to_video_: "text-to-video",
+  image_to_video_: "image-to-video",
+  reference_: "reference-to-video",
+};
+
+function videoResolution(value: string | undefined) {
+  return value === undefined ? undefined : requestResolution(value);
+}
+
+function videoWhen(entries: Record<string, string | boolean | undefined>) {
+  return Object.fromEntries(Object.entries(entries).filter(([, value]) => value !== undefined)) as Record<string, string | boolean>;
+}
+
+// One video SKU as a price and its request conditions, or undefined when it has no CostV2 form
+// (minimum_cents_per_generation, cents_per_megapixel_second_*) or an unknown name.
+export function parseVideoSku(name: string, value: string): VideoSku | undefined {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount < 0) return undefined;
+  const cents = roundPrice(amount / 100);
+  if (name === "cents_per_image_input") return { target: "image", unit: "image", price: cents, when: {} };
+  if (name === "reference_images" || name === "reference_input_images") {
+    return { target: "image", unit: "image", price: roundPrice(amount), when: {} };
+  }
+  let match = new RegExp(`^cents_per_(?:second_output|video_output_second)(?:_${VIDEO_RESOLUTION})?$`).exec(name);
+  if (match !== null) {
+    return { target: "output", unit: "second", price: cents, when: videoWhen({ resolution: videoResolution(match[1]) }) };
+  }
+  match = new RegExp(`^cents_per_second_video_continuation(?:_${VIDEO_RESOLUTION})?$`).exec(name);
+  if (match !== null) {
+    return {
+      target: "output",
+      unit: "second",
+      price: cents,
+      when: videoWhen({ resolution: videoResolution(match[1]), input_video: true }),
+    };
+  }
+  match = new RegExp(`^(text_to_video_|image_to_video_|reference_)?duration_seconds(?:_(with|without)_audio)?(?:_${VIDEO_RESOLUTION})?$`).exec(name);
+  if (match !== null) {
+    return {
+      target: "output",
+      unit: "second",
+      price: roundPrice(amount),
+      when: videoWhen({
+        resolution: videoResolution(match[3]),
+        generate_audio: match[2] === undefined ? undefined : match[2] === "with",
+        mode: match[1] === undefined ? undefined : VIDEO_MODES[match[1]],
+      }),
+    };
+  }
+  match = new RegExp(`^video_tokens(?:_${VIDEO_RESOLUTION})?(?:_(with_video_input|without_audio))?$`).exec(name);
+  if (match !== null) {
+    return {
+      target: "output",
+      unit: "token",
+      price: price(value)!,
+      when: videoWhen({
+        resolution: videoResolution(match[1]),
+        input_video: match[2] === "with_video_input" ? true : undefined,
+        generate_audio: match[2] === "without_audio" ? false : undefined,
+      }),
+    };
+  }
+  return undefined;
+}
+
+// Video prices from OpenRouter's pricing SKUs. The plain SKU (else the first) is the base price;
+// each other SKU becomes an override on its qualifiers, more specific ones last so they win, and
+// SKUs that already price out the same are left out. Any SKU without a CostV2 form drops the cost.
+export function videoCost(skus: Record<string, string> | undefined) {
+  if (skus === undefined || Object.keys(skus).length === 0) return undefined;
+  const parsed: VideoSku[] = [];
+  for (const [name, value] of Object.entries(skus)) {
+    const sku = parseVideoSku(name, value);
+    if (sku === undefined) return undefined;
+    parsed.push(sku);
+  }
+  const images = [...new Set(parsed.filter((sku) => sku.target === "image").map((sku) => sku.price))];
+  const outputs = parsed.filter((sku) => sku.target === "output");
+  if (images.length > 1 || outputs.length === 0 || new Set(outputs.map((sku) => sku.unit)).size > 1) return undefined;
+
+  const base = outputs.find((sku) => Object.keys(sku.when).length === 0) ?? outputs[0]!;
+  const matches = (when: Record<string, unknown>, target: Record<string, unknown>) =>
+    Object.entries(when).every(([key, value]) => target[key] === value);
+  const applied: VideoSku[] = [];
+  const rest = outputs
+    .filter((sku) => sku !== base)
+    .sort((a, b) => Object.keys(a.when).length - Object.keys(b.when).length);
+  for (const sku of rest) {
+    const effective = applied.reduce(
+      (current, override) => matches(override.when, sku.when) ? override.price : current,
+      base.price,
+    );
+    if (effective !== sku.price) applied.push(sku);
+  }
+  const overrides = applied.map((sku) => ({
+    when: Object.fromEntries(Object.entries(sku.when).map(([key, value]) => [key, { equals: value }])),
+    price: sku.price,
+  }));
+  return {
+    ...(images.length === 1 ? { image: { input: unitPrice("image", images[0]!, []) } } : {}),
+    video: { output: unitPrice(base.unit, base.price, overrides) },
+  };
+}
 
 export function mediaType(model: OpenRouterModel): MediaType | undefined {
   const [output, ...rest] = model.architecture.output_modalities;
@@ -409,7 +715,7 @@ export function buildOpenRouterMediaModel(
     };
     doc.limit = {
       context,
-      output: type === "embedding" || type === "reranking"
+      output: type === "embedding" || type === "reranking" || type === "image" || type === "video"
         ? 0
         : model.top_provider.max_completion_tokens ?? 0,
     };
@@ -471,11 +777,30 @@ function mediaModalities(model: OpenRouterModel, type: MediaType) {
         input: [...new Set(model.architecture.input_modalities.flatMap((value) => MIME_INPUT[value] ?? []))],
         output: [type],
       };
+    case "image": {
+      // The endpoint's output_format values, else PNG ("media_type ... including image/png").
+      const formats = (model.image_endpoints ?? [])
+        .flatMap((endpoint) => endpoint.supported_parameters?.output_format?.values ?? [])
+        .map((value) => IMAGE_OUTPUT[value])
+        .filter((value): value is string => value !== undefined);
+      return {
+        input: [...new Set(model.architecture.input_modalities.flatMap((value) => MIME_INPUT[value] ?? []))],
+        output: formats.length > 0 ? [...new Set(formats)] : ["image/png"],
+      };
+    }
+    case "video":
+      // Jobs download as MP4 (https://openrouter.ai/docs/guides/overview/multimodal/video-generation).
+      return {
+        input: [...new Set(model.architecture.input_modalities.flatMap((value) => MIME_INPUT[value] ?? []))],
+        output: ["video/mp4"],
+      };
   }
 }
 
 // Prices per CostV2 unit: per 1M tokens or characters, per second otherwise.
 export function mediaCost(model: OpenRouterModel, type: MediaType) {
+  if (type === "image") return imageCost(model);
+  if (type === "video") return videoCost(model.video_pricing_skus);
   const free = model.id.endsWith(":free");
   const prompt = Number(model.pricing.prompt);
   const completion = Number(model.pricing.completion);
@@ -531,7 +856,7 @@ export function resolveMediaBaseModel(openrouterID: string) {
   const [prefix, ...modelParts] = openrouterID.split("/");
   if (prefix === undefined || modelParts.length === 0 || prefix.startsWith("~")) return undefined;
   const lab = CANONICAL_PROVIDER_PREFIXES[prefix.toLowerCase() as keyof typeof CANONICAL_PROVIDER_PREFIXES]
-    ?.metadata ?? prefix.toLowerCase();
+    ?.metadata ?? MEDIA_LAB_PREFIXES[prefix.toLowerCase()] ?? prefix.toLowerCase();
   const slug = normalizeModelSlug(modelParts.join("/").replace(/:free$/, ""));
   const matches = [...labFiles(lab)].filter(
     (file) => file.endsWith(".toml") && normalizeModelSlug(file.slice(0, -".toml".length)) === slug,
@@ -559,16 +884,284 @@ function price(value: string | undefined) {
     : undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Chat model prices
+// ---------------------------------------------------------------------------
+
+// Where each catalog price goes in a v2 file. Prices are per token in the catalog
+// (per 1M in the file). `image` and `image_output` are per token too: OpenRouter's
+// model pages show "Image Input: $0.30/M tokens" and "Image Output: $60/M tokens".
+// https://openrouter.ai/docs/guides/overview/models#pricing-object
+type PriceTarget = {
+  section: "text" | "image";
+  entry: string;
+  field: "price" | "reasoning" | "read" | "write";
+  ttl?: "1h";
+};
+
+const PRICE_TARGETS: Record<string, PriceTarget> = {
+  prompt: { section: "text", entry: "input", field: "price" },
+  input_cache_read: { section: "text", entry: "input", field: "read" },
+  input_cache_write: { section: "text", entry: "input", field: "write" },
+  input_cache_write_1h: { section: "text", entry: "input", field: "write", ttl: "1h" },
+  completion: { section: "text", entry: "output", field: "price" },
+  internal_reasoning: { section: "text", entry: "output", field: "reasoning" },
+  image: { section: "image", entry: "input", field: "price" },
+  image_output: { section: "image", entry: "output", field: "price" },
+};
+
+// Audio prices carry no unit: OpenRouter's model pages show them per token on most
+// models ("Input Audio: $1/M tokens") and per minute on others (Voxtral Small:
+// "Input Audio at $0.006/minute"), so the catalog alone can't price them exactly.
+const UNITLESS_PRICES = new Set(["audio", "input_audio_cache", "audio_output"]);
+
+// Flat fees per call ("Cost per web search operation", "Fixed cost per API request");
+// v2 costs have no per-call price.
+const PER_CALL_PRICES = new Set(["web_search", "request"]);
+
+function isPriceKey(key: string) {
+  return PRICE_TARGETS[key] !== undefined || UNITLESS_PRICES.has(key) || PER_CALL_PRICES.has(key);
+}
+
+// Override conditions this module reads. The docs ask consumers to skip entries
+// with any other condition.
+const CONDITION_KEYS = new Set(["min_prompt_tokens", "utc_days", "utc_start", "utc_end"]);
+const TIME_WINDOW_KEYS = ["utc_days", "utc_start", "utc_end"];
+
+type PriceOverride = NonNullable<OpenRouterModel["pricing"]["overrides"]>[number];
+type CostEntry = Record<string, any>;
+type CostOverride = { when: Record<string, unknown> } & CostEntry;
+
+const UTC_DAYS: Record<string, string> = {
+  monday: "mon",
+  tuesday: "tue",
+  wednesday: "wed",
+  thursday: "thu",
+  friday: "fri",
+  saturday: "sat",
+  sunday: "sun",
+};
+
+function hasReasoning(model: OpenRouterModel) {
+  return model.supported_parameters.includes("reasoning") || model.supported_parameters.includes("include_reasoning");
+}
+
+function isTimeWindow(override: PriceOverride) {
+  return TIME_WINDOW_KEYS.some((key) => key in override);
+}
+
+function isContextOnly(override: PriceOverride) {
+  return Object.keys(override).every((key) => !CONDITION_KEYS.has(key) || key === "min_prompt_tokens");
+}
+
+// A v2 `when` for one override entry, or why it has none.
+// https://openrouter.ai/docs/guides/overview/models#pricing-overrides
+export function overrideWhen(override: PriceOverride): Record<string, unknown> | string {
+  const when: Record<string, unknown> = {};
+  if (override.min_prompt_tokens !== undefined) {
+    if (!Number.isInteger(override.min_prompt_tokens) || override.min_prompt_tokens < 0) {
+      return "min_prompt_tokens is not a token count";
+    }
+    // "applies when total prompt tokens are strictly greater than this threshold"
+    when.context = { gt: override.min_prompt_tokens };
+  }
+  if (override.utc_days !== undefined) {
+    const days = Array.isArray(override.utc_days)
+      ? override.utc_days.map((day) => (typeof day === "string" ? UTC_DAYS[day.toLowerCase()] : undefined))
+      : [];
+    if (days.length === 0 || days.some((day) => day === undefined)) return "utc_days is not a list of weekdays";
+    // Evaluated at the request instant, like utc_hours.
+    when.utc_days = { in: Object.values(UTC_DAYS).filter((day) => days.includes(day)) };
+  }
+  if ((override.utc_start === undefined) !== (override.utc_end === undefined)) {
+    return "only one of utc_start and utc_end";
+  }
+  if (override.utc_start !== undefined) {
+    const start = utcTime(override.utc_start);
+    const end = utcTime(override.utc_end);
+    if (start === undefined || end === undefined) return "utc_start or utc_end is not an HHMM time";
+    const from = start === "00:00" ? [] : [{ utc_hours: { gte: start } }];
+    const until = end === "00:00" ? [] : [{ utc_hours: { lt: end } }];
+    // "A window whose end is not after its start wraps past midnight ... t >= start || t < end",
+    // so one that ends where it starts is the whole day.
+    const hours = end > start
+      ? [...from, ...until]
+      : end === start ? [] : from.length + until.length === 2 ? [{ any: [...from, ...until] }] : [...from, ...until];
+    if (hours.length === 1) Object.assign(when, hours[0]);
+    if (hours.length === 2) when.all = hours;
+  }
+  return when;
+}
+
+function utcTime(value: unknown) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return undefined;
+  const hours = Math.floor(value / 100);
+  const minutes = value % 100;
+  if (hours > 23 || minutes > 59) return undefined;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+// The default and 1h cache write TTLs a file lists, which label the catalog's
+// input_cache_write and input_cache_write_1h prices.
+function writeTtls(current: Record<string, unknown> | undefined) {
+  const cache = (current?.capabilities as { cache?: { explicit?: { ttl?: unknown } } } | undefined)?.cache;
+  const ttls = cache?.explicit?.ttl;
+  return Array.isArray(ttls) && ttls.length === 2 && ttls[0] !== "1h" && ttls[1] === "1h"
+    ? (ttls[0] as string)
+    : undefined;
+}
+
+/**
+ * Every catalog price as v2 cost: the top-level prices and each override entry
+ * in catalog order, with its conditions as `when`. v2 overrides merge in order
+ * with later ones winning per field, and absent fields inherit the base, as
+ * OpenRouter's overrides do. Prices with no exact v2 form get a notice.
+ */
+export function catalogCost(model: OpenRouterModel, current?: Record<string, unknown>) {
+  const reasoning = hasReasoning(model);
+  const has1h = [model.pricing, ...(model.pricing.overrides ?? [])]
+    .some((prices) => (prices as Record<string, unknown>).input_cache_write_1h !== undefined);
+  const defaultTtl = has1h ? writeTtls(current) : undefined;
+  const issues = new Map<string, Set<string>>();
+  const note = (reason: string, key: string) => issues.set(reason, (issues.get(reason) ?? new Set()).add(key));
+
+  const prices = (source: Record<string, unknown>, isOverride: boolean) => {
+    const cost: Record<string, Record<string, CostEntry>> = {};
+    for (const [key, raw] of Object.entries(source)) {
+      if (key === "overrides" || (isOverride && CONDITION_KEYS.has(key))) continue;
+      const target = PRICE_TARGETS[key];
+      if (target === undefined) {
+        note(UNITLESS_PRICES.has(key)
+          ? "the catalog gives no unit (per token on some models, per minute on others)"
+          : PER_CALL_PRICES.has(key) ? "v2 has no per-call price" : "no known v2 field", key);
+        continue;
+      }
+      if (key === "internal_reasoning" && !reasoning) {
+        note("the model takes no reasoning parameter, so v1 carries no reasoning price", key);
+        continue;
+      }
+      if (target.ttl !== undefined && defaultTtl === undefined) {
+        note("the file's cache capability doesn't list a default and a 1h TTL", key);
+        continue;
+      }
+      const value = typeof raw === "string" ? price(raw) : undefined;
+      if (value === undefined) {
+        note("not a price", key);
+        continue;
+      }
+      const entry = ((cost[target.section] ??= {})[target.entry] ??= {});
+      if (target.field === "read") (entry.cache ??= {}).read = value;
+      else if (target.field === "write" && defaultTtl !== undefined) {
+        ((entry.cache ??= {}).write ??= {})[target.ttl ?? defaultTtl] = value;
+      } else if (target.field === "write") (entry.cache ??= {}).write = value;
+      else entry[target.field] = value;
+    }
+    // The default TTL leads, as v1 takes the first cache write price.
+    const write = cost.text?.input?.cache?.write;
+    if (typeof write === "object" && defaultTtl !== undefined && write[defaultTtl] !== undefined) {
+      cost.text!.input!.cache.write = { [defaultTtl]: write[defaultTtl], ...write };
+    }
+    return cost;
+  };
+
+  const base = prices(model.pricing, false);
+  const overrides: Record<string, CostOverride[]> = {};
+  let ownsContext = false;
+  for (const override of model.pricing.overrides ?? []) {
+    const unknown = Object.keys(override).filter((key) =>
+      !CONDITION_KEYS.has(key) && !isPriceKey(key)
+    );
+    const when = unknown.length > 0 ? `unknown fields ${unknown.join(", ")}` : overrideWhen(override);
+    if (typeof when === "string") {
+      note(`skipped override ${JSON.stringify(override)}: ${when}`, "overrides");
+      continue;
+    }
+    if (when.context !== undefined && isContextOnly(override)) ownsContext = true;
+    for (const [section, entries] of Object.entries(prices(override, true))) {
+      for (const [entry, fields] of Object.entries(entries)) {
+        if (base[section]?.[entry]?.price === undefined && fields.price === undefined) {
+          note(`an override prices ${section}.${entry} with no base price`, "overrides");
+          continue;
+        }
+        (overrides[`${section}.${entry}`] ??= []).push({ when, ...fields });
+      }
+    }
+  }
+
+  const section = (name: "image") => {
+    const entries: Record<string, CostEntry> = Object.fromEntries(
+      Object.entries(base[name] ?? {}).map(([entry, fields]) => {
+        const list = overrides[`${name}.${entry}`];
+        return [entry, { ...fields, ...(list === undefined ? {} : { overrides: list }) }];
+      }),
+    );
+    return Object.keys(entries).length > 0 ? entries : undefined;
+  };
+  const write = base.text?.input?.cache?.write;
+  return {
+    write: typeof write === "object" ? write as Record<string, number> : undefined,
+    overrides: { input: overrides["text.input"] ?? [], output: overrides["text.output"] ?? [] },
+    ownsContext,
+    image: section("image"),
+    notices: [...issues].map(([reason, keys]) => `${model.id}: ${[...keys].join(", ")} not synced: ${reason}`),
+  };
+}
+
+// v2 values the v1 patch can't write: the 1h cache write price, override lists
+// and image prices.
+function catalogV2Set(model: OpenRouterModel, current: Record<string, unknown> | undefined) {
+  const cost = catalogCost(model, current);
+  return {
+    notices: cost.notices,
+    v2Set: {
+      ...(cost.write === undefined ? {} : { "cost.text.input.cache.write": cost.write }),
+      "cost.text.input.overrides": withCatalogOverrides(cost.overrides.input, cost.ownsContext),
+      "cost.text.output.overrides": withCatalogOverrides(cost.overrides.output, cost.ownsContext),
+      "cost.image": cost.image,
+    },
+  };
+}
+
+function usesCondition(when: unknown, keys: string[]): boolean {
+  if (Array.isArray(when)) return when.some((item) => usesCondition(item, keys));
+  if (!isPlainObject(when)) return false;
+  return Object.entries(when).some(([key, value]) =>
+    keys.includes(key) || (["all", "any", "not"].includes(key) && usesCondition(value, keys))
+  );
+}
+
+// The file's overrides with the catalog's in place of the ones it owns: every
+// time-of-day override, and context tiers when the catalog lists any (otherwise
+// the file's tiers stay, as v1 keeps them).
+function withCatalogOverrides(catalog: CostOverride[], ownsContext: boolean) {
+  return (current: unknown) => {
+    const kept = (Array.isArray(current) ? current : []).filter((item) => {
+      const when = (item as { when?: unknown } | null)?.when;
+      if (usesCondition(when, ["utc_days", "utc_hours"])) return false;
+      return !(ownsContext && isPlainObject(when) && Object.keys(when).length === 1 && "context" in when);
+    });
+    const next = [...kept, ...catalog];
+    return next.length > 0 ? next : undefined;
+  };
+}
+
 function costTiers(model: OpenRouterModel, existing: ExistingModel | undefined) {
+  const prompt = price(model.pricing.prompt);
+  const completion = price(model.pricing.completion);
+  const reasoning = hasReasoning(model);
   const tiers = (model.pricing.overrides ?? [])
     .flatMap((o) => {
-      const input = price(o.prompt);
-      const output = price(o.completion);
-      if (o.min_prompt_tokens === undefined || input === undefined || output === undefined) return [];
+      if (o.min_prompt_tokens === undefined || isTimeWindow(o) || typeof overrideWhen(o) === "string") return [];
+      if (Object.keys(o).some((key) => !CONDITION_KEYS.has(key) && !isPriceKey(key))) return [];
+      // Prices an entry leaves out are the base prices.
+      const input = price(o.prompt) ?? prompt;
+      const output = price(o.completion) ?? completion;
+      if (input === undefined || output === undefined) return [];
       return [{
         tier: { type: "context" as const, size: o.min_prompt_tokens },
         input,
         output,
+        reasoning: reasoning ? price(o.internal_reasoning as string | undefined) : undefined,
         cache_read: price(o.input_cache_read),
         cache_write: price(o.input_cache_write),
       }];

@@ -132,19 +132,16 @@ export function modelV2ToV1(
 // `interleaved` its reasoning requirement. With several `[api.<protocol>]`
 // tables, the first one in the file is the default and becomes the v1 API.
 // The protocol only becomes a v1 `shape` where it isn't the SDK's default
-// (OpenAI and Azure default to Responses).
+// (OpenAI and Azure default to Responses), unless `legacy_shape` keeps one.
 function toV1Api(api: Record<string, AuthoredApiEntryV2> | undefined) {
   const first = Object.entries(api ?? {})[0];
   if (first === undefined) return {};
-  const [protocol, { base_url, sdk, compatibility }] = first;
+  const [protocol, { base_url, sdk, compatibility, legacy_shape }] = first;
   const npm = sdk?.aisdk;
-  const responsesByDefault = npm === "@ai-sdk/openai" || npm === "@ai-sdk/azure";
-  const shape =
-    protocol === "responses" && !responsesByDefault
-      ? "responses"
-      : protocol === "chat-completions" && responsesByDefault
-        ? "completions"
-        : undefined;
+  if (legacy_shape !== undefined && toProtocol(legacy_shape) !== protocol) {
+    throw new Error(`legacy_shape = "${legacy_shape}" doesn't match [api.${protocol}]`);
+  }
+  const shape = legacy_shape ?? toV1Shape(protocol, npm);
   const provider = withoutUndefined({ npm, api: base_url, shape });
   const field = compatibility?.reasoning_field;
   return withoutUndefined({
@@ -153,15 +150,24 @@ function toV1Api(api: Record<string, AuthoredApiEntryV2> | undefined) {
   });
 }
 
+// The v1 `shape` a protocol gets on an SDK: none where it's the SDK's default.
+export function toV1Shape(protocol: string, npm: string | undefined) {
+  const responsesByDefault = npm === "@ai-sdk/openai" || npm === "@ai-sdk/azure";
+  if (protocol === "responses" && !responsesByDefault) return "responses";
+  if (protocol === "chat-completions" && responsesByDefault) return "completions";
+  return undefined;
+}
+
+function toProtocol(shape: "responses" | "completions") {
+  return shape === "responses" ? "responses" : "chat-completions";
+}
+
 function toReasoningOptions(reasoning: ReasoningSupportV2) {
   if (!reasoning.supported) return undefined;
   const options: Record<string, unknown>[] = [];
   if (reasoning.toggle) options.push({ type: "toggle" });
   if (reasoning.effort !== undefined) {
-    options.push({
-      type: "effort",
-      values: reasoning.effort.map((value) => (value === "default" ? null : value)),
-    });
+    options.push({ type: "effort", values: reasoning.effort });
   }
   if (reasoning.budget !== undefined) {
     options.push(withoutUndefined({ type: "budget_tokens", ...reasoning.budget }));
@@ -286,11 +292,11 @@ function scaleCost(cost: Record<string, unknown>, factor: number) {
   );
 }
 
-function toV1Modalities(modalities: string[]) {
+export function toV1Modalities(modalities: string[]) {
   return [...new Set(modalities.map(toV1Modality))];
 }
 
-function toV1Modality(modality: string) {
+export function toV1Modality(modality: string) {
   if (modality === "application/pdf") return "pdf";
   if (["decision", "embedding", "reranking"].includes(modality)) return "text";
   const base = modality.split("/")[0]!;

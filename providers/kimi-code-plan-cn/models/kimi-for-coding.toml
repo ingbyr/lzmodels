@@ -12,7 +12,6 @@
 # subscription convention.
 schema = 2
 base_model = "moonshotai/kimi-k2.8-preview"
-name = "kimi-for-coding"
 
 [capabilities]
 reasoning = { supported = true, default = { type = "effort", value = "max" }, effort = ["none", "low", "high", "max"] }

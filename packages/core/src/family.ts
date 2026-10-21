@@ -94,6 +94,9 @@ export const ModelFamilyValues = [
   // Reflection Beam
   "beam",
 
+  // Recursive Flint
+  "flint",
+
   // Mistral family
   "mistral",
   "mistral-large",

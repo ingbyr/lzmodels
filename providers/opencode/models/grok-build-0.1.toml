@@ -1,16 +1,19 @@
+# Pricing and endpoint (Responses): https://opencode.ai/v2/docs/console/models/ (accessed 2026-10-21).
+# Mid-conversation flags unset: Zen documents none and this model wasn't testable (model access is disabled for the probe key).
+schema = 2
 base_model = "xai/grok-build-0.1"
+
+[capabilities]
+reasoning = { supported = true }
 structured_output = true
-reasoning_options = []
 
-[cost]
-input = 1.00
-output = 2.00
-cache_read = 0.20
+[api.responses]
+base_url = "https://opencode.ai/inference/openai/v1"
+sdk = { aisdk = "@ai-sdk/openai" }
 
-[limit]
-context = 256_000
-output = 256_000
+[cost.text.input]
+price = 1
+cache = { read = 0.2 }
 
-[provider]
-npm = "@ai-sdk/openai"
-api = "https://opencode.ai/inference/openai/v1"
+[cost.text.output]
+price = 2

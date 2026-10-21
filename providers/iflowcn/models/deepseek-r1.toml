@@ -1,24 +1,20 @@
-name = "DeepSeek-R1"
+# Deprecated: iFlow shut down its API service and model library on 2026-04-17
+# (https://vibex.iflow.cn/t/topic/4819, FAQ 6; https://github.com/iflow-ai/iflow-cli).
+# knowledge: kept from the earlier entry; unsourced.
+schema = 2
+base_model = "deepseek/deepseek-r1"
 description = "DeepSeek reasoning model for multi-step analysis, math, coding, and tools"
-family = "deepseek-thinking"
-release_date = "2025-01-20"
-last_updated = "2025-01-20"
-attachment = false
-reasoning = true
-reasoning_options = []
-temperature = true
 knowledge = "2024-12"
-tool_call = true
-open_weights = true
+status = "deprecated"
 
-[cost]
-input = 0.0
-output = 0.0
+[capabilities]
+reasoning = { supported = true }
 
 [limit]
-context = 128_000
 output = 32_000
 
-[modalities]
-input = ["text"]
-output = ["text"]
+[cost.text.input]
+price = 0
+
+[cost.text.output]
+price = 0

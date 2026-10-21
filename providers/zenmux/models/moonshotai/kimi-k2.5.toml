@@ -1,27 +1,25 @@
-name = "Kimi K2.5"
+# Retired: absent from GET https://zenmux.ai/api/v1/models and its model page shows Sunset (2026-10-21).
+# Cache: https://docs.zenmux.ai/guide/advanced/prompt-cache.html (implicit: OpenAI, DeepSeek, Grok, Gemini, Qwen, Kimi, GLM, Ling/Ring; cache_control: Claude, Gemini, Qwen).
+# Toggle: Chat Completions reasoning.enabled = true|false (https://docs.zenmux.ai/guide/advanced/reasoning.html).
+schema = 2
+base_model = "moonshotai/kimi-k2.5"
 description = "Kimi multimodal agent model for visual understanding, coding, and planning"
-release_date = "2026-01-27"
-last_updated = "2026-01-27"
-attachment = true
-reasoning = true
-reasoning_options = [{ type = "toggle" }]
-temperature = false
-tool_call = true
-knowledge = "2025-01-01"
-open_weights = false
+status = "deprecated"
 
-[cost]
-input = 0.58
-output = 3.02
-cache_read = 0.10
+[capabilities]
+reasoning = { supported = true, toggle = true }
+cache = { supported = true, implicit = true }
 
 [limit]
 context = 262_000
 output = 64_000
 
-[interleaved]
-field = "reasoning_content"
+[api.chat-completions]
+compatibility = { reasoning_field = "reasoning_content" }
 
-[modalities]
-input = ["text", "image", "video"]
-output = ["text"]
+[cost.text.input]
+price = 0.58
+cache = { read = 0.1 }
+
+[cost.text.output]
+price = 3.02

@@ -45,6 +45,7 @@ export type ModelFamily =
   | "elevenlabs"
   | "ernie"
   | "falcon"
+  | "flint"
   | "flux"
   | "fugu"
   | "gemini"
