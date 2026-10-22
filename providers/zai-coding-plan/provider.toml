@@ -5,5 +5,6 @@
 name = "Z.AI Coding Plan"
 env = ["ZHIPU_API_KEY"]
 npm = "@ai-sdk/openai-compatible"
+opencodeai = "@opencode/ai/providers/zai-coding-plan/chat"
 doc = "https://docs.z.ai/devpack/overview"
 api = "https://api.z.ai/api/coding/paas/v4"

@@ -4,7 +4,6 @@ schema = 2
 base_model = "google/gemini-2.5-flash-image"
 
 [capabilities]
-reasoning = { supported = false }
 structured_output = true
 system_updates = false
 effort_updates = false
@@ -12,15 +11,24 @@ effort_updates = false
 [limit]
 output = 8_192
 
+[api.chat-completions]
+
+[api.images]
+sdk = { opencodeai = "@opencode/ai/protocols/openai-images" }
+
 [cost.text.input]
 price = 0.3
 cache = { read = 0.03, write = 0.083333 }
 
 [cost.text.output]
 price = 2.5
+reasoning = 2.5
 
 [cost.image.input]
 price = 0.3
 
 [cost.image.output]
 price = 30
+
+[cost.web_search]
+price = 14

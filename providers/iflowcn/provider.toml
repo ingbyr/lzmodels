@@ -1,6 +1,7 @@
 name = "iFlow"
 env = ["IFLOW_API_KEY"]
 npm = "@ai-sdk/openai-compatible"
+opencodeai = "@opencode/ai/providers/openai-compatible"
 # Reasoning HTTP format (accessed 2026-06-25): the retired iFlow CLI advertised
 # a UI-level "Thinking" feature and configured `https://apis.iflow.cn/v1`, but
 # that is not documentation of a raw POST /v1/chat/completions request field.

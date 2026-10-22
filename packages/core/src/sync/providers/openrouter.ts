@@ -246,18 +246,29 @@ export const openrouter = {
       const authored = context.authored(model.id);
       return authored === undefined ? undefined : { id: model.id, model: authored as SyncedModel };
     }
-    const translated = buildOpenRouterModel(model, context.existing(model.id));
+    const built = buildOpenRouterModel(model, context.existing(model.id));
+    // The decision model's first API (systemone) names its own AI SDK package,
+    // which v1 reads as the model's provider npm.
+    const translated = isDecisionModel(model)
+      ? { ...built, provider: { npm: DECISION_APIS.systemone.sdk.aisdk } }
+      : built;
     // Without a catalog price the file's cost is kept as is.
     const catalog = price(model.pricing.prompt) === undefined || price(model.pricing.completion) === undefined
       ? undefined
       : catalogV2Set(model, context.v2?.(model.id));
+    const api = isDecisionModel(model)
+      ? DECISION_APIS
+      : "base_model" in built && typeof built.base_model === "string" && rawLabModel(built.base_model)?.type === "image"
+        ? IMAGE_CHAT_APIS
+        : undefined;
+    const v2Set = api === undefined ? catalog?.v2Set : { ...catalog?.v2Set, api: structuredClone(api) };
     return {
       id: model.id,
       model: translated,
       header: translated.reasoning_options?.some((option) => option.type === "toggle")
         ? "# Toggle: reasoning.enabled = true|false\n# https://openrouter.ai/docs/guides/best-practices/reasoning-tokens\n"
         : undefined,
-      v2Set: catalog?.v2Set,
+      v2Set,
       notices: catalog?.notices,
     };
   },
@@ -275,6 +286,23 @@ function isUnavailable(model: OpenRouterModel) {
 function isDecisionModel(model: OpenRouterModel) {
   return model.architecture.output_modalities.includes("decisions");
 }
+
+// Decision models answer POST /api/v1/systemone, which OpenCode's openrouter
+// entry (experimental.evaluation) and @ai-sdk/typesafe-ai's decisionModel (with
+// this baseURL) call, and POST /api/alpha/decisions, which
+// the OpenRouter AI SDK provider's evaluationModel calls.
+// https://openrouter.ai/docs/api/api-reference/systemone/submit-a-system-one-request
+// https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request
+const DECISION_APIS = {
+  systemone: { sdk: { aisdk: "@ai-sdk/typesafe-ai", opencodeai: "@opencode/ai/providers/openrouter" } },
+  decisions: { base_url: "https://openrouter.ai/api/alpha", sdk: { opencodeai: "none" } },
+};
+// Chat models whose lab is an image model are also served by the /images router
+// (https://openrouter.ai/api/v1/images/models), which answers OpenAI's format.
+const IMAGE_CHAT_APIS = {
+  "chat-completions": {},
+  images: { sdk: { opencodeai: "@opencode/ai/protocols/openai-images" } },
+};
 
 // ---------------------------------------------------------------------------
 // Speech, transcription, embedding, rerank and image models (v2-only files)
@@ -295,8 +323,10 @@ const BASE_URL = "https://openrouter.ai/api/v1";
 
 // Each type has its own OpenRouter endpoint. Speech and transcription follow
 // OpenAI's audio API ("compatible with the OpenAI SDK"), and the OpenRouter AI
-// SDK provider implements embeddings. No AI SDK package speaks OpenRouter's
-// rerank API.
+// SDK provider implements embeddings. Rerank takes and returns Cohere's rerank
+// shape, so @ai-sdk/cohere works against it. Images also answer OpenAI's
+// /images/generations, so OpenCode uses its OpenAI media protocols for images,
+// speech and transcription; it has none for video, embeddings or rerank.
 // https://openrouter.ai/docs/api/api-reference/tts/create-speech (POST /audio/speech)
 // https://openrouter.ai/docs/api/api-reference/stt/create-transcription (POST /audio/transcriptions)
 // https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request (POST /embeddings)
@@ -305,13 +335,17 @@ const BASE_URL = "https://openrouter.ai/api/v1";
 // AI SDK provider's imageModel)
 // https://openrouter.ai/docs/guides/overview/multimodal/video-generation (POST /videos; the OpenRouter
 // AI SDK provider's videoModel)
-const MEDIA_APIS: Record<MediaType, { protocol: string; aisdk?: string }> = {
-  speech: { protocol: "speech", aisdk: "@ai-sdk/openai" },
-  transcription: { protocol: "transcriptions", aisdk: "@ai-sdk/openai" },
-  embedding: { protocol: "embeddings", aisdk: "@openrouter/ai-sdk-provider" },
-  reranking: { protocol: "rerank" },
-  image: { protocol: "images", aisdk: "@openrouter/ai-sdk-provider" },
-  video: { protocol: "videos", aisdk: "@openrouter/ai-sdk-provider" },
+const MEDIA_APIS: Record<MediaType, { protocol: string; aisdk: string; opencodeai: string }> = {
+  speech: { protocol: "speech", aisdk: "@ai-sdk/openai", opencodeai: "@opencode/ai/protocols/openai-speech" },
+  transcription: {
+    protocol: "transcriptions",
+    aisdk: "@ai-sdk/openai",
+    opencodeai: "@opencode/ai/protocols/openai-transcription",
+  },
+  embedding: { protocol: "embeddings", aisdk: "@openrouter/ai-sdk-provider", opencodeai: "none" },
+  reranking: { protocol: "rerank", aisdk: "@ai-sdk/cohere", opencodeai: "none" },
+  image: { protocol: "images", aisdk: "@openrouter/ai-sdk-provider", opencodeai: "@opencode/ai/protocols/openai-images" },
+  video: { protocol: "videos", aisdk: "@openrouter/ai-sdk-provider", opencodeai: "none" },
 };
 
 const MEDIA_HEADERS: Record<MediaType, string> = {
@@ -722,10 +756,7 @@ export function buildOpenRouterMediaModel(
   }
 
   doc.api = {
-    [api.protocol]: {
-      base_url: BASE_URL,
-      ...(api.aisdk !== undefined ? { sdk: { aisdk: api.aisdk } } : {}),
-    },
+    [api.protocol]: { base_url: BASE_URL, sdk: { aisdk: api.aisdk, opencodeai: api.opencodeai } },
   };
   const cost = mediaCost(model, type);
   if (cost !== undefined) doc.cost = cost;
@@ -915,12 +946,33 @@ const PRICE_TARGETS: Record<string, PriceTarget> = {
 // "Input Audio at $0.006/minute"), so the catalog alone can't price them exactly.
 const UNITLESS_PRICES = new Set(["audio", "input_audio_cache", "audio_output"]);
 
-// Flat fees per call ("Cost per web search operation", "Fixed cost per API request");
-// v2 costs have no per-call price.
-const PER_CALL_PRICES = new Set(["web_search", "request"]);
+// Flat fee per call ("Fixed cost per API request"); v2 costs have no per-call price.
+const PER_CALL_PRICES = new Set(["request"]);
+
+// "Cost per web search operation", in USD per search; v2 prices web search per 1,000.
+const WEB_SEARCH_PRICE = "web_search";
+// Per 1,000 requests by search context size, where the catalog lists them.
+const WEB_SEARCH_CONTEXT_PRICES: Record<string, string> = {
+  web_search_per_1000_requests_low: "low",
+  web_search_per_1000_requests_medium: "medium",
+  web_search_per_1000_requests_high: "high",
+};
 
 function isPriceKey(key: string) {
-  return PRICE_TARGETS[key] !== undefined || UNITLESS_PRICES.has(key) || PER_CALL_PRICES.has(key);
+  return PRICE_TARGETS[key] !== undefined
+    || UNITLESS_PRICES.has(key)
+    || PER_CALL_PRICES.has(key)
+    || key === WEB_SEARCH_PRICE
+    || WEB_SEARCH_CONTEXT_PRICES[key] !== undefined;
+}
+
+// A catalog web search price as USD per 1,000. Zero stands for no price.
+export function webSearchPrice(value: unknown, perSearch: boolean) {
+  if (typeof value !== "string") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0
+    ? Math.round(number * (perSearch ? 1000 : 1) * 1e6) / 1e6
+    : undefined;
 }
 
 // Override conditions this module reads. The docs ask consumers to skip entries
@@ -1018,7 +1070,6 @@ function writeTtls(current: Record<string, unknown> | undefined) {
  * OpenRouter's overrides do. Prices with no exact v2 form get a notice.
  */
 export function catalogCost(model: OpenRouterModel, current?: Record<string, unknown>) {
-  const reasoning = hasReasoning(model);
   const has1h = [model.pricing, ...(model.pricing.overrides ?? [])]
     .some((prices) => (prices as Record<string, unknown>).input_cache_write_1h !== undefined);
   const defaultTtl = has1h ? writeTtls(current) : undefined;
@@ -1029,15 +1080,12 @@ export function catalogCost(model: OpenRouterModel, current?: Record<string, unk
     const cost: Record<string, Record<string, CostEntry>> = {};
     for (const [key, raw] of Object.entries(source)) {
       if (key === "overrides" || (isOverride && CONDITION_KEYS.has(key))) continue;
+      if (key === WEB_SEARCH_PRICE || WEB_SEARCH_CONTEXT_PRICES[key] !== undefined) continue;
       const target = PRICE_TARGETS[key];
       if (target === undefined) {
         note(UNITLESS_PRICES.has(key)
           ? "the catalog gives no unit (per token on some models, per minute on others)"
           : PER_CALL_PRICES.has(key) ? "v2 has no per-call price" : "no known v2 field", key);
-        continue;
-      }
-      if (key === "internal_reasoning" && !reasoning) {
-        note("the model takes no reasoning parameter, so v1 carries no reasoning price", key);
         continue;
       }
       if (target.ttl !== undefined && defaultTtl === undefined) {
@@ -1064,7 +1112,33 @@ export function catalogCost(model: OpenRouterModel, current?: Record<string, unk
     return cost;
   };
 
+  // Web search prices, each with the search context size it applies to (if any).
+  const webSearch = (source: Record<string, unknown>) => {
+    const keys: Array<[string, string | undefined]> = [
+      [WEB_SEARCH_PRICE, undefined],
+      ...Object.entries(WEB_SEARCH_CONTEXT_PRICES),
+    ];
+    const entries: Array<{ size?: string; price: number }> = [];
+    for (const [key, size] of keys) {
+      const raw = source[key];
+      if (raw === undefined) continue;
+      const value = webSearchPrice(raw, key === WEB_SEARCH_PRICE);
+      if (value !== undefined) entries.push({ size, price: value });
+      else if (Number(raw) !== 0) note("not a price", key);
+    }
+    return entries;
+  };
+  const sized = (when: Record<string, unknown>, size: string | undefined) =>
+    size === undefined ? when : { ...when, search_context_size: { equals: size } };
+
   const base = prices(model.pricing, false);
+  const baseSearch = webSearch(model.pricing);
+  // Without a flat price, the base is the medium one (OpenAI's default search context size).
+  const searchPrice = baseSearch.find((entry) => entry.size === undefined)?.price
+    ?? baseSearch.find((entry) => entry.size === "medium")?.price;
+  const searchOverrides: CostOverride[] = baseSearch
+    .filter((entry) => entry.size !== undefined)
+    .map((entry) => ({ when: sized({}, entry.size), price: entry.price }));
   const overrides: Record<string, CostOverride[]> = {};
   let ownsContext = false;
   for (const override of model.pricing.overrides ?? []) {
@@ -1086,7 +1160,16 @@ export function catalogCost(model: OpenRouterModel, current?: Record<string, unk
         (overrides[`${section}.${entry}`] ??= []).push({ when, ...fields });
       }
     }
+    const search = webSearch(override);
+    if (search.length > 0 && searchPrice === undefined) {
+      note("an override prices web_search with no base price", "overrides");
+    } else {
+      searchOverrides.push(...search.map((entry) => ({ when: sized(when, entry.size), price: entry.price })));
+    }
   }
+  const webSearchCost = searchPrice === undefined
+    ? undefined
+    : { price: searchPrice, ...(searchOverrides.length > 0 ? { overrides: searchOverrides } : {}) };
 
   const section = (name: "image") => {
     const entries: Record<string, CostEntry> = Object.fromEntries(
@@ -1099,25 +1182,32 @@ export function catalogCost(model: OpenRouterModel, current?: Record<string, unk
   };
   const write = base.text?.input?.cache?.write;
   return {
+    reasoning: base.text?.output?.reasoning as number | undefined,
     write: typeof write === "object" ? write as Record<string, number> : undefined,
     overrides: { input: overrides["text.input"] ?? [], output: overrides["text.output"] ?? [] },
     ownsContext,
     image: section("image"),
+    webSearch: webSearchCost,
     notices: [...issues].map(([reason, keys]) => `${model.id}: ${[...keys].join(", ")} not synced: ${reason}`),
   };
 }
 
-// v2 values the v1 patch can't write: the 1h cache write price, override lists
-// and image prices.
+// v2 values the v1 patch can't write: the 1h cache write price, override lists,
+// image and web search prices, and the reasoning price of a model without
+// reasoning (which v1 leaves out). Reasoning tokens are billed whenever the model
+// reasons.
 function catalogV2Set(model: OpenRouterModel, current: Record<string, unknown> | undefined) {
   const cost = catalogCost(model, current);
+  const priced = price(model.pricing.prompt) !== undefined && price(model.pricing.completion) !== undefined;
   return {
     notices: cost.notices,
     v2Set: {
+      ...(priced ? { "cost.text.output.reasoning": cost.reasoning } : {}),
       ...(cost.write === undefined ? {} : { "cost.text.input.cache.write": cost.write }),
       "cost.text.input.overrides": withCatalogOverrides(cost.overrides.input, cost.ownsContext),
       "cost.text.output.overrides": withCatalogOverrides(cost.overrides.output, cost.ownsContext),
       "cost.image": cost.image,
+      "cost.web_search": cost.webSearch,
     },
   };
 }

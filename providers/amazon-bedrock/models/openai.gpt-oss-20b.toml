@@ -25,7 +25,7 @@ output = 131_072
 
 [api.responses]
 base_url = "https://bedrock-mantle.${AWS_REGION}.api.aws/v1"
-sdk = { aisdk = "@ai-sdk/amazon-bedrock/mantle" }
+sdk = { aisdk = "@ai-sdk/amazon-bedrock/mantle", opencodeai = "@opencode/ai/providers/amazon-bedrock/mantle/responses" }
 
 [cost.text.input]
 price = 0.07

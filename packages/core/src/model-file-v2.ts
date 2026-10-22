@@ -1,5 +1,4 @@
-// Builds, patches, and writes v2 provider model files from v1 fields. Shared by
-// the migration script and sync, so both write the same TOML.
+// Builds, patches, and writes v2 provider model files from v1 fields.
 
 import { toCostV2 } from "./generate-v2.js";
 import { ReasoningOption } from "./schema.js";
@@ -23,7 +22,7 @@ const IDENTITY = [
 
 // v1 fields → the v2 provider model file they stand for (without the header).
 // `protocol` is the API the model is served on, for `provider` and `interleaved`
-// fields that don't set a shape (the migration script resolves it).
+// fields that don't set a shape (the caller resolves it).
 export function providerModelToV2(model: Record<string, any>, protocol?: string): Doc {
   for (const field of ["body", "headers"]) {
     if (model.provider?.[field] !== undefined) throw new Error(`provider.${field} has no v2 field yet`);
@@ -166,7 +165,11 @@ export function patchModelV2(
       if (capabilities !== undefined) mode.capabilities = capabilities;
     }
   }
-  if (same("provider", "interleaved") && doc.api !== undefined) next.api = doc.api;
+  if (doc.api !== undefined) {
+    const api = same("provider", "interleaved") ? doc.api : patchApis(next.api, doc.api);
+    if (api === undefined) delete next.api;
+    else next.api = api;
+  }
   if (doc.metadata !== undefined) next.metadata = doc.metadata;
   if (doc.v2_only !== undefined) next.v2_only = doc.v2_only;
   return next;
@@ -181,6 +184,27 @@ function mergeModalities(current: string[] | undefined, synced: string[]) {
     const own = current.filter((item) => toV1Modality(item) === toV1Modality(value));
     return own.length > 0 ? own : [value];
   });
+}
+
+// A synced change to v1's `provider` or `interleaved` rewrites the file's first
+// API table, which is what v1 reads. The table's OpenCode package, an
+// `aisdk = "none"` and the file's other tables are v2-only, so they are kept.
+function patchApis(first: Doc | undefined, current: Doc) {
+  const [protocol, ...rest] = Object.keys(current);
+  if (protocol === undefined) return first;
+  const { opencodeai, aisdk } = current[protocol]?.sdk ?? {};
+  const v2Only = { ...(opencodeai !== undefined ? { opencodeai } : {}), ...(aisdk === "none" ? { aisdk } : {}) };
+  let head = first;
+  if (Object.keys(v2Only).length > 0 || rest.length > 0) {
+    const [key, entry] = Object.entries<Doc>(first ?? { [protocol]: {} })[0]!;
+    const keep = Object.keys(v2Only).length > 0 && key === protocol;
+    head = { [key]: keep ? { ...entry, sdk: { ...v2Only, ...entry.sdk } } : entry };
+  }
+  if (rest.length === 0) return head;
+  return {
+    ...head,
+    ...Object.fromEntries(rest.filter((key) => !(key in head!)).map((key) => [key, current[key]])),
+  };
 }
 
 // Modes priced by a multiplier in the v2 file whose v1 price sync only carried
@@ -321,10 +345,11 @@ export function sameV1Model(a: Record<string, any>, b: Record<string, any>) {
 export function normalizeV1(model: Record<string, any>) {
   const { id: _id, ...copy } = structuredClone(model) as Doc;
   for (const tier of copy.cost?.tiers ?? []) tier.tier = { type: "context", ...tier.tier };
+  // v2 files don't keep the order of reasoning options.
   if (copy.reasoning_options !== undefined) {
-    copy.reasoning_options = copy.reasoning_options.map((option: unknown) =>
-      ReasoningOption.parse(option),
-    );
+    copy.reasoning_options = copy.reasoning_options
+      .map((option: unknown) => ReasoningOption.parse(option))
+      .sort((a: { type: string }, b: { type: string }) => a.type.localeCompare(b.type));
   }
   return copy;
 }
@@ -380,27 +405,25 @@ export function formatModelV2(doc: Doc) {
 
 function costLines(cost: CostV2, prefix = "cost") {
   const out: string[] = [];
+  const entryLines = (table: string, entry: Doc) => {
+    const { overrides, ...rest } = entry;
+    out.push("", `[${table}]`, ...tableLines(rest));
+    for (const override of overrides ?? []) {
+      const { when, ...fields } = override as { when: CostWhenV2 };
+      out.push("", `[[${table}.overrides]]`, `when = ${formatTomlValue(when)}`, ...tableLines(fields));
+    }
+  };
   for (const [modality, prices] of Object.entries(cost)) {
-    if (modality === "multipliers" || prices === undefined) continue;
+    if (modality === "multipliers" || modality === "web_search" || prices === undefined) continue;
     const { input, output } = prices as { input?: InputCostV2; output?: OutputCostV2 };
     for (const [direction, entry] of [
       ["input", input],
       ["output", output],
     ] as const) {
-      if (entry === undefined) continue;
-      const { overrides, ...rest } = entry as Doc;
-      out.push("", `[${prefix}.${modality}.${direction}]`, ...tableLines(rest));
-      for (const override of overrides ?? []) {
-        const { when, ...fields } = override as { when: CostWhenV2 };
-        out.push(
-          "",
-          `[[${prefix}.${modality}.${direction}.overrides]]`,
-          `when = ${formatTomlValue(when)}`,
-          ...tableLines(fields),
-        );
-      }
+      if (entry !== undefined) entryLines(`${prefix}.${modality}.${direction}`, entry);
     }
   }
+  if (cost.web_search !== undefined) entryLines(`${prefix}.web_search`, cost.web_search);
   for (const multiplier of cost.multipliers ?? []) {
     out.push("", `[[${prefix}.multipliers]]`, ...tableLines(multiplier));
   }

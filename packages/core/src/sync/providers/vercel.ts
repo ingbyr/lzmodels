@@ -119,10 +119,8 @@ export const vercel = {
       header: translated.reasoning_options?.some((option) => option.type === "toggle")
         ? "# Toggle: reasoning.enabled = true|false\n# https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-chat-completions/reasoning\n"
         : undefined,
+      ...(model.type === "evaluation" ? { v2Set: { api: structuredClone(DECISION_APIS) } } : {}),
     };
-  },
-  sameModel(current, desired) {
-    return sameVercelModel(current, desired);
   },
 } satisfies SyncProvider<VercelModel>;
 
@@ -392,48 +390,6 @@ function inferFamily(modelID: string, name: string) {
     });
 }
 
-function sameVercelModel(current: ExistingModel, desired: SyncedModel) {
-  const desiredModel = desired as ExistingModel;
-  const fields: Array<[unknown, unknown, boolean?]> = [
-    [current.base_model, desiredModel.base_model],
-    [current.base_model_omit, desiredModel.base_model_omit],
-    [current.type, desiredModel.type],
-    [current.name, desiredModel.name],
-    [current.description, desiredModel.description],
-    [current.family, desiredModel.family],
-    [current.attachment, desiredModel.attachment],
-    [current.reasoning, desiredModel.reasoning],
-    [current.reasoning_options, desiredModel.reasoning_options],
-    [current.tool_call, desiredModel.tool_call],
-    [current.structured_output, desiredModel.structured_output],
-    [current.open_weights, desiredModel.open_weights],
-    [current.release_date, desiredModel.release_date],
-    [current.cost?.input, desiredModel.cost?.input, true],
-    [current.cost?.output, desiredModel.cost?.output, true],
-    [current.cost?.cache_read, desiredModel.cost?.cache_read, true],
-    [current.cost?.cache_write, desiredModel.cost?.cache_write, true],
-    [current.cost?.tiers, desiredModel.cost?.tiers],
-    [current.limit?.context, desiredModel.limit?.context],
-    [current.limit?.input, desiredModel.limit?.input],
-    [current.limit?.output, desiredModel.limit?.output],
-    [current.modalities?.input, desiredModel.modalities?.input],
-  ];
-
-  return fields.every(([currentValue, desiredValue, cost]) => {
-    if (cost && currentValue === 0 && desiredValue === undefined) return true;
-    if (cost && typeof currentValue === "number" && typeof desiredValue === "number") {
-      return Math.abs(currentValue - desiredValue) <= 0.001;
-    }
-    if (
-      (currentValue === 0 || desiredValue === 0)
-      && (typeof currentValue === "number" || typeof desiredValue === "number")
-    ) {
-      return true;
-    }
-    return JSON.stringify(currentValue) === JSON.stringify(desiredValue);
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Image, video, embedding, rerank, speech, transcription and realtime models
 // ---------------------------------------------------------------------------
@@ -471,8 +427,23 @@ const MEDIA_PROTOCOLS: Record<MediaType, string> = {
   realtime: "realtime",
 };
 // GPT-Live has its own Live endpoint (wss .../v4/ai/live-model), not the
-// realtime one: https://vercel.com/docs/ai-gateway/modalities/realtime/gpt-live
+// realtime one, and @ai-sdk/gateway has no Live model:
+// https://vercel.com/docs/ai-gateway/modalities/realtime/gpt-live
 const LIVE_MODELS = new Set(["openai/gpt-live-1"]);
+// OpenCode's vercel-ai-gateway entry point only speaks the chat APIs, not
+// these endpoints.
+const MEDIA_SDK = { opencodeai: "none" };
+// Decision models: POST /v1/evaluate, which OpenCode's vercel-ai-gateway entry
+// calls (experimental.evaluation). @ai-sdk/gateway's decisionModel uses its own
+// /v4/ai/decision-model endpoint instead.
+// https://vercel.com/docs/ai-gateway/modalities/decision
+const DECISION_APIS = {
+  evaluate: {
+    base_url: "https://ai-gateway.vercel.sh/v1",
+    sdk: { aisdk: "none", opencodeai: "@opencode/ai/providers/vercel-ai-gateway" },
+  },
+};
+const LIVE_SDK = { aisdk: "none", opencodeai: "none" };
 
 const MEDIA_HEADERS: Record<MediaType, string> = {
   image: "# Synced from https://ai-gateway.vercel.sh/v1/models (type image)\n# https://vercel.com/docs/ai-gateway/modalities/image-generation\n",
@@ -536,7 +507,10 @@ export function buildVercelMediaModel(
     : authored?.base_model ?? resolveVercelBaseModel(model.id);
   const lab = base === undefined ? undefined : labDoc(base);
   const existing = current ?? (authored === undefined ? undefined : v1ToDoc(authored, lab));
-  const doc: Doc = { schema: 2 };
+  // New media files are v2-only; files already published in v1 stay there.
+  const doc: Doc = existing === undefined || existing.v2_only === true
+    ? { schema: 2, v2_only: true }
+    : { schema: 2 };
   const route = routeCapabilities(model, type);
 
   if (base !== undefined && lab !== undefined) {
@@ -561,6 +535,12 @@ export function buildVercelMediaModel(
       Object.entries(orderedCapabilities({ ...pickCapabilities(existing?.capabilities), ...route }))
         .filter(([key, value]) => !sameValue(value, lab.capabilities?.[key])),
     );
+    // Realtime session config has no reasoning control, so a reasoning lab model
+    // gets an explicit `supported = true` (no caller control) instead of
+    // inheriting the lab's, which leaves v1 without reasoning_options.
+    if (type === "realtime" && capabilities.reasoning === undefined && lab.capabilities?.reasoning?.supported === true) {
+      capabilities.reasoning = { supported: true };
+    }
     if (Object.keys(capabilities).length > 0) doc.capabilities = capabilities;
     const limit = Object.fromEntries(
       Object.entries(mediaLimit(model, type, lab.limit))
@@ -590,7 +570,9 @@ export function buildVercelMediaModel(
     doc.limit = mediaLimit(model, type, undefined, existing?.limit?.context);
   }
 
-  doc.api = { [LIVE_MODELS.has(model.id) ? "live" : MEDIA_PROTOCOLS[type]]: { base_url: MEDIA_BASE_URL } };
+  doc.api = LIVE_MODELS.has(model.id)
+    ? { live: { base_url: MEDIA_BASE_URL, sdk: { ...LIVE_SDK } } }
+    : { [MEDIA_PROTOCOLS[type]]: { base_url: MEDIA_BASE_URL, sdk: { ...MEDIA_SDK } } };
   const { cost, issue } = vercelMediaCost(model, type);
   if (issue !== undefined) console.warn(`Vercel ${model.id}: no cost written, ${issue}`);
   if (cost !== undefined) doc.cost = cost;

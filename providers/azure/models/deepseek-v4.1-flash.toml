@@ -29,7 +29,7 @@ output = 128_000
 
 [api.chat-completions]
 base_url = "https://${AZURE_RESOURCE_NAME}.services.ai.azure.com/models"
-sdk = { aisdk = "@ai-sdk/openai-compatible" }
+sdk = { aisdk = "@ai-sdk/openai-compatible", opencodeai = "@opencode/ai/providers/openai-compatible" }
 
 [cost.text.input]
 price = 0.3

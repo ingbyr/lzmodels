@@ -165,3 +165,79 @@ test('v2 effort "default" stays the literal "default" in v1', () => {
   const back = modelV2ToV1({ ...(Bun.TOML.parse(formatModelV2(doc)) as Record<string, unknown>), id: "m" });
   expect(back.reasoning_options).toEqual([{ type: "effort", values: ["none", "default", "low"] }]);
 });
+
+test("patchModelV2 keeps a file's other API tables and OpenCode package", () => {
+  const api = {
+    "chat-completions": {
+      sdk: { opencodeai: "@opencode/ai/providers/openai-compatible" },
+      compatibility: { reasoning_field: "reasoning_details" },
+    },
+    images: { base_url: "https://images.example.com/v1", sdk: { opencodeai: "@opencode/ai/protocols/openai-images" } },
+  };
+  const doc = { schema: 2, base_model: "moonshotai/kimi-k2.6", api, cost: { text: { input: { price: 1 }, output: { price: 2 } } } };
+  const before = modelV2ToV1({ ...doc, id: "m" });
+  const { id: _id, ...after } = { ...before, cost: { input: 3, output: 4 } };
+
+  // Unchanged v1 API fields: every table is kept as it is, in order.
+  expect(Object.entries(patchModelV2(doc, before, after).api)).toEqual(Object.entries(api));
+  // A synced change to v1's fields rewrites the first table and keeps the rest.
+  const changed = { ...after, interleaved: { field: "reasoning_content" } };
+  expect(Object.entries(patchModelV2(doc, before, changed).api)).toEqual([
+    [
+      "chat-completions",
+      {
+        sdk: { opencodeai: "@opencode/ai/providers/openai-compatible" },
+        compatibility: { reasoning_field: "reasoning_content" },
+      },
+    ],
+    ["images", api.images],
+  ]);
+});
+
+test('patchModelV2 keeps aisdk = "none" when sync rewrites the first table', () => {
+  const api = { systemone: { base_url: "https://example.com/v1", sdk: { aisdk: "none" } } };
+  const doc = { schema: 2, base_model: "typesafe/jev-1.13", api, cost: { text: { input: { price: 1 }, output: { price: 2 } } } };
+  const before = modelV2ToV1({ ...doc, id: "m" });
+  expect(before.provider).toEqual({ api: "https://example.com/v1" });
+  const { id: _id, ...after } = { ...before, provider: { api: "https://example.com/v2" } };
+  expect(patchModelV2(doc, before, after).api).toEqual({
+    systemone: { base_url: "https://example.com/v2", sdk: { aisdk: "none" } },
+  });
+});
+
+test("web search prices are written to v2 files, kept by patches, and left out of v1", () => {
+  const doc = {
+    schema: 2,
+    base_model: "openai/gpt-5.4",
+    cost: {
+      text: { input: { price: 2.5 }, output: { price: 15 } },
+      web_search: {
+        price: 10,
+        overrides: [
+          { when: { search_context_size: { equals: "low" } }, price: 5 },
+          { when: { search_context_size: { in: ["high"] } }, price: 25 },
+        ],
+      },
+    },
+  };
+  const toml = formatModelV2(doc);
+  expect(toml).toContain([
+    "[cost.web_search]",
+    "price = 10",
+    "",
+    "[[cost.web_search.overrides]]",
+    'when = { search_context_size = { equals = "low" } }',
+    "price = 5",
+  ].join("\n"));
+  const parsed = { ...(Bun.TOML.parse(toml) as Record<string, unknown>), id: "gpt-5.4" };
+  expect(parsed.cost).toEqual(doc.cost);
+  expect(modelV2ToV1(parsed).cost).toEqual({ input: 2.5, output: 15 });
+
+  const before = { base_model: "openai/gpt-5.4", cost: { input: 2.5, output: 15 } };
+  const after = { base_model: "openai/gpt-5.4", cost: { input: 3, output: 15 } };
+  expect(patchModelV2(doc, before, after).cost.web_search).toEqual(doc.cost.web_search);
+
+  // A web search price alone has no v1 cost.
+  expect(modelV2ToV1({ schema: 2, id: "x", cost: { web_search: { price: 10 } } }).cost).toBeUndefined();
+  expect(() => modelV2ToV1({ schema: 2, id: "x", cost: { web_search: { price: 10, unit: "request" } } })).toThrow();
+});
