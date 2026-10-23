@@ -1,3 +1,5 @@
+# Web search: $10 per 1,000 web_search tool calls (all models): https://developers.openai.com/api/docs/pricing#built-in-tools
+# Token-only multipliers (object factor, so cost.web_search is unscaled): Flex (https://developers.openai.com/api/docs/guides/flex-processing).
 schema = 2
 name = "GPT-5 Nano"
 description = "Tiny GPT-5 lane for routing, extraction, classification, and bulk jobs"
@@ -34,9 +36,12 @@ cache = { read = 0.005 }
 [cost.text.output]
 price = 0.4
 
+[cost.web_search]
+price = 10
+
 [[cost.multipliers]]
 when = { service_tier = { equals = "flex" } }
-factor = 0.5
+factor = { text = 0.5 }
 
 [experimental.modes.flex]
 body = { service_tier = "flex" }

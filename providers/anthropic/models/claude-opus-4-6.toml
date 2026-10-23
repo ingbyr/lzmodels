@@ -1,3 +1,5 @@
+# Web search: $10 per 1,000 searches; each search counts once, however many results it returns: https://platform.claude.com/docs/en/about-claude/pricing#web-search-tool
+# Token-only multipliers (object factor, so cost.web_search is unscaled): US data residency (https://platform.claude.com/docs/en/manage-claude/data-residency#pricing).
 schema = 2
 name = "Claude Opus 4.6"
 description = "High-end Claude for difficult coding, planning, and slower expert reasoning"
@@ -31,6 +33,9 @@ cache = { read = 0.5, write = { "5m" = 6.25, "1h" = 10 } }
 [cost.text.output]
 price = 25
 
+[cost.web_search]
+price = 10
+
 [[cost.multipliers]]
 when = { region = { equals = "us" } }
-factor = 1.1
+factor = { text = 1.1 }

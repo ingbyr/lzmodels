@@ -1,6 +1,8 @@
 # Per-turn effort needs the mid-conversation-output-config-2026-07-01 header from the first turn:
 # toggling it mid-session splits the cache on this model.
 # tools.updates: tool_addition/tool_removal blocks (inline-tools-2026-09-15) keep the cache.
+# Web search: $10 per 1,000 searches; each search counts once, however many results it returns: https://platform.claude.com/docs/en/about-claude/pricing#web-search-tool
+# Token-only multipliers (object factor, so cost.web_search is unscaled): fast mode (https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing); US data residency (https://platform.claude.com/docs/en/manage-claude/data-residency#pricing).
 schema = 2
 base_model = "anthropic/claude-opus-5"
 
@@ -20,13 +22,16 @@ cache = { read = 0.5, write = { "5m" = 6.25, "1h" = 10 } }
 [cost.text.output]
 price = 25
 
+[cost.web_search]
+price = 10
+
 [[cost.multipliers]]
 when = { service_tier = { equals = "fast" } }
-factor = 2
+factor = { text = 2 }
 
 [[cost.multipliers]]
 when = { region = { equals = "us" } }
-factor = 1.1
+factor = { text = 1.1 }
 
 [experimental.modes.fast]
 body = { speed = "fast" }
