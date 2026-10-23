@@ -171,7 +171,7 @@ CrossModel is implemented in `packages/core/src/sync/providers/crossmodel.ts`.
 - Pricing, context/output limits, modalities, and reasoning controls come from CrossModel's public catalog.
 - `structured_output` comes from `capabilities.json` (documented `/v1/models` shape) or `capabilities.structured_output.json_schema` (the public catalog); when both are absent or null, the sync preserves an existing authored override.
 - `identity.release_stage = "deprecated"` sets `status = "deprecated"`; otherwise an existing status is kept.
-- `capabilities.context.caching = true` sets only `capabilities.cache.supported = true` in v2 files (CrossModel documents no mechanism or TTL). Authored `implicit` / `explicit` details are kept.
+- `capabilities.context.caching = true` sets `capabilities.cache = { implicit = true }` in v2 files that have no cache kinds yet (CrossModel documents no mechanism or TTL). Authored `implicit` / `explicit` details are kept.
 - Effort lists are sorted low to high, because v2 compares them in order.
 - Intrinsic model facts (`knowledge`, dates, `family`, `open_weights`) are never synced; they stay inherited from the canonical `base_model` metadata. Display names are not synced either, so v1 names remain the lab's.
 
@@ -192,7 +192,7 @@ EmpirioLabs is implemented in `packages/core/src/sync/providers/empiriolabs.ts`.
 - Prices, limits, modalities, `supported_parameters` reasoning controls (`enable_thinking`, `reasoning_effort`, `thinking_budget`) and display names come from the catalog. Effort lists are sorted low to high.
 - `structured_output` is `"json_schema"`, `"json_object"` or `"none"` (https://docs.empiriolabs.ai/compatibility.md); `"none"` syncs as false.
 - `deprecated = true` sets `status = "deprecated"`; otherwise an existing status is kept.
-- A `cache` or `prompt_cache` feature sets only `capabilities.cache.supported = true` in v2 files. Authored `implicit` / `explicit` details are kept.
+- A `cache` or `prompt_cache` feature sets `capabilities.cache = { implicit = true }` in v2 files that have no cache kinds yet. Authored `implicit` / `explicit` details are kept.
 - `base_model` files never carry model facts (dates, `family`, `knowledge`, `open_weights`); they come from the lab. Only standalone files keep them.
 
 ## OpenRouter Notes
@@ -300,7 +300,8 @@ Mistral is implemented in `packages/core/src/sync/providers/mistral.ts`.
 - Reasoning controls are checked, not written. For each reasoning model the sync sends one chat request with `reasoning_effort: "minimal"` and `max_tokens: 1`; Mistral's rejection lists the accepted values. If they differ from the authored `effort` values, the model's file is left unchanged and a missing-model issue is opened with the diagnostic. This catches aliases that move to a model with different controls. Accepted values can include aliases (Mistral silently accepts `minimal` on `zai-glm-5-2`), so a probe that succeeds or returns an unrecognized message is treated as unknown and skips the check rather than writing guessed values.
 - A model that newly reports reasoning without authored `capabilities.reasoning` controls also fails closed with a missing-model issue.
 - Ordinary auto-merge rules apply: context, tool-calling, and modality updates can auto-merge, while any change to reasoning metadata still requires manual review because Mistral is not a reviewed reasoning provider.
-- Embedding, OCR, moderation, transcription, and TTS rows are ignored; existing TOMLs for them are kept unchanged.
+- Embedding, OCR, moderation, transcription, and TTS rows carry no chat metadata; their existing TOMLs are kept unchanged except for API tables.
+- API tables follow the capabilities: `completion_fim` adds `[api.fim]` (`/v1/fim/completions`), `moderation` adds `[api.moderations]` and `ocr` adds `[api.ocr]`, each with `aisdk = "none"` and `opencodeai = "none"`. They come after the file's first table, which v1 reads and the sync leaves alone; a file with none starts with Chat Completions, or with the model's only API.
 - New chat models are not created automatically (`skipCreates`). Each opens one deduped missing-model issue under its canonical ID (the row whose `id` equals its `name`), not once per alias.
 - Local models absent from the response are retained (`deleteMissing: false`) because the listing is scoped to the key's workspace and drops retired models.
 

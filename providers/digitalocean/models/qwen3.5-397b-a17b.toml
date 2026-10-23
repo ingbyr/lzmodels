@@ -10,7 +10,7 @@ description = "Qwen instruction model for multilingual chat, reasoning, and tool
 [capabilities]
 tools = { supported = true, updates = false }
 reasoning = { supported = true, effort = ["none", "low", "medium", "high"] }
-cache = { supported = true, implicit = true }
+cache = { implicit = true }
 structured_output = true
 system_updates = false
 effort_updates = false
@@ -20,9 +20,20 @@ prompt_cache_key = true
 context = 131_072
 output = 131_072
 
+[api.chat-completions]
+
+[api.responses]
+sdk = { aisdk = "@ai-sdk/openai", opencodeai = "@opencode/ai/providers/openai-compatible/responses" }
+
+[api.messages]
+sdk = { aisdk = "@ai-sdk/anthropic", opencodeai = "@opencode/ai/providers/anthropic-compatible" }
+
 [cost.text.input]
 price = 0.55
 cache = { read = 0.111 }
 
 [cost.text.output]
 price = 3.5
+
+[cost.web_search]
+price = 10

@@ -2,6 +2,8 @@
 # them in place (cache kept) and Anthropic's own client enables them for this model (2026-10-19).
 # Web search: $10 per 1,000 searches; each search counts once, however many results it returns: https://platform.claude.com/docs/en/about-claude/pricing#web-search-tool
 # Token-only multipliers (object factor, so cost.web_search is unscaled): US data residency (https://platform.claude.com/docs/en/manage-claude/data-residency#pricing).
+# APIs: Messages, and Chat Completions through the OpenAI SDK compatibility layer (https://platform.claude.com/docs/en/api/openai-sdk)
+# Per-API flags: mid-conversation system messages, per-message output_config and tool_addition/tool_removal are Messages API features, so they sit on [api.messages]. The OpenAI SDK compatibility endpoint hoists system messages to the top (https://platform.claude.com/docs/en/api/openai-sdk) and has no per-message effort or tool changes.
 schema = 2
 name = "Claude Sonnet 5"
 description = "Everyday Claude agent model for coding, planning, browsing, and general work"
@@ -20,13 +22,19 @@ tools = { supported = true, updates = false }
 reasoning = { supported = true, toggle = true, effort = ["low", "medium", "high", "xhigh", "max"] }
 structured_output = true
 temperature = false
-system_updates = true
 effort_updates = false
-cache = { supported = true, implicit = false, explicit = { ttl = ["5m", "1h"], max_breakpoints = 4, targets = ["tools", "system", "messages"], min_tokens = 1_024 } }
+cache = { explicit = { ttl = ["5m", "1h"], max_breakpoints = 4, targets = ["tools", "system", "messages"], min_tokens = 1_024 } }
 
 [limit]
 context = 1_000_000
 output = 128_000
+
+[api.messages]
+capabilities = { system_updates = true }
+
+[api.chat-completions]
+base_url = "https://api.anthropic.com/v1"
+sdk = { aisdk = "@ai-sdk/openai-compatible", opencodeai = "@opencode/ai/providers/openai-compatible" }
 
 [cost.text.input]
 price = 2

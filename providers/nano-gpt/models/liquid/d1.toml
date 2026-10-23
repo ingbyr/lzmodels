@@ -20,9 +20,6 @@ input = 65_536
 [api.systemone]
 sdk = { aisdk = "@ai-sdk/typesafe-ai", opencodeai = "@opencode/ai/providers/typesafe-ai" }
 
-[api.decisions]
-sdk = { aisdk = "@openrouter/ai-sdk-provider", opencodeai = "none" }
-
 [cost.text.input]
 price = 0.04
 cache = { read = 0.04 }

@@ -23,7 +23,8 @@ const IDENTITY = [
 // v1 fields → the v2 provider model file they stand for (without the header).
 // `protocol` is the API the model is served on, for `provider` and `interleaved`
 // fields that don't set a shape (the caller resolves it).
-export function providerModelToV2(model: Record<string, any>, protocol?: string): Doc {
+// `providerNpm` is the provider's `npm`, which an API table without its own `aisdk` uses.
+export function providerModelToV2(model: Record<string, any>, protocol?: string, providerNpm?: string): Doc {
   for (const field of ["body", "headers"]) {
     if (model.provider?.[field] !== undefined) throw new Error(`provider.${field} has no v2 field yet`);
   }
@@ -53,7 +54,7 @@ export function providerModelToV2(model: Record<string, any>, protocol?: string)
   }
   if (Object.keys(capabilities).length > 0) doc.capabilities = capabilities;
   if (model.limit !== undefined) doc.limit = model.limit;
-  const api = apiEntry(model, protocol);
+  const api = apiEntry(model, protocol, providerNpm);
   if (api !== undefined) doc.api = api;
 
   const cost: Doc | undefined = model.cost && toCostV2(model.cost);
@@ -86,7 +87,7 @@ export function providerModelToV2(model: Record<string, any>, protocol?: string)
 }
 
 // v1 `provider` and `interleaved` → the model's `[api.<protocol>]` table.
-function apiEntry(model: Record<string, any>, fallback: string | undefined) {
+function apiEntry(model: Record<string, any>, fallback: string | undefined, providerNpm?: string) {
   const { provider, interleaved } = model;
   if (provider === undefined && interleaved === undefined) return undefined;
   const shape = provider?.shape;
@@ -99,7 +100,7 @@ function apiEntry(model: Record<string, any>, fallback: string | undefined) {
   if (interleaved === true) entry.compatibility = { replay_reasoning: true };
   else if (interleaved !== undefined) entry.compatibility = { reasoning_field: interleaved.field };
   // A shape v1 would drop as the SDK's default stays as the legacy field.
-  if (shape !== undefined && toV1Shape(protocol, provider?.npm) === undefined) entry.legacy_shape = shape;
+  if (shape !== undefined && toV1Shape(protocol, provider?.npm ?? providerNpm) === undefined) entry.legacy_shape = shape;
   return { [protocol]: entry };
 }
 
@@ -111,8 +112,9 @@ export function patchModelV2(
   before: Record<string, any>,
   after: Record<string, any>,
   resolved?: { before: InheritedFlags; after: InheritedFlags },
+  providerNpm?: string,
 ): Doc {
-  const next = providerModelToV2(after, Object.keys(doc.api ?? {})[0]);
+  const next = providerModelToV2(after, Object.keys(doc.api ?? {})[0], providerNpm);
   // `reasoning` and `tool_call` may be inherited from the lab on one side, as in
   // sameV1Model. With the lab's values (`resolved`), they compare resolved.
   const same = (...keys: string[]) =>
@@ -194,11 +196,19 @@ function patchApis(first: Doc | undefined, current: Doc) {
   if (protocol === undefined) return first;
   const { opencodeai, aisdk } = current[protocol]?.sdk ?? {};
   const v2Only = { ...(opencodeai !== undefined ? { opencodeai } : {}), ...(aisdk === "none" ? { aisdk } : {}) };
+  const path = current[protocol]?.path;
+  const capabilities = current[protocol]?.capabilities;
   let head = first;
-  if (Object.keys(v2Only).length > 0 || rest.length > 0) {
+  if (Object.keys(v2Only).length > 0 || path !== undefined || capabilities !== undefined || rest.length > 0) {
     const [key, entry] = Object.entries<Doc>(first ?? { [protocol]: {} })[0]!;
-    const keep = Object.keys(v2Only).length > 0 && key === protocol;
-    head = { [key]: keep ? { ...entry, sdk: { ...v2Only, ...entry.sdk } } : entry };
+    const same = key === protocol;
+    const { base_url, ...others } = entry;
+    const withPath =
+      same && path !== undefined ? { ...(base_url !== undefined ? { base_url } : {}), path, ...others } : entry;
+    const withSdk = same && Object.keys(v2Only).length > 0 ? { ...withPath, sdk: { ...v2Only, ...entry.sdk } } : withPath;
+    head = {
+      [key]: same && capabilities !== undefined ? { ...withSdk, capabilities } : withSdk,
+    };
   }
   if (rest.length === 0) return head;
   return {

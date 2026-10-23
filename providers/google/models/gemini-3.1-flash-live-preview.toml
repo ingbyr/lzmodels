@@ -13,11 +13,11 @@ base_model = "google/gemini-3.1-flash-live-preview"
 tools = { supported = true, updates = false }
 reasoning = { supported = true, default = { type = "effort", value = "minimal" }, effort = ["minimal", "low", "medium", "high"] }
 structured_output = false
-cache = { supported = false }
+cache = false
 system_updates = false
 effort_updates = false
 
-[api.realtime]
+[api.bidi-generate-content]
 sdk = { opencodeai = "none" }
 
 [cost.text.input]

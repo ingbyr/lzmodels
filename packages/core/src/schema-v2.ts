@@ -113,22 +113,24 @@ export const KnownToolGrammarV2 = z.enum(ToolGrammarV2Values);
 export const ToolGrammarV2 = openEnum(ToolGrammarV2Values);
 export type ToolGrammarV2 = z.infer<typeof ToolGrammarV2>;
 
+const toolsSupportedV2 = {
+  supported: z.literal(true),
+  strict: z.boolean().optional(),
+  choice: z.array(ToolChoiceV2).optional(),
+  search: z.boolean().optional(),
+  grammar: z.array(ToolGrammarV2).optional(),
+  updates: z.boolean().optional(),
+};
+
+// Files may leave `updates` out, which means false. The API always states it.
+export const AuthoredToolsSupportV2 = z.discriminatedUnion("supported", [
+  z.object({ supported: z.literal(false) }).strict(),
+  z.object(toolsSupportedV2).strict(),
+]);
+
 export const ToolsSupportV2 = z.discriminatedUnion("supported", [
-  z
-    .object({
-      supported: z.literal(false),
-    })
-    .strict(),
-  z
-    .object({
-      supported: z.literal(true),
-      strict: z.boolean().optional(),
-      choice: z.array(ToolChoiceV2).optional(),
-      search: z.boolean().optional(),
-      grammar: z.array(ToolGrammarV2).optional(),
-      updates: z.boolean().optional(),
-    })
-    .strict(),
+  z.object({ supported: z.literal(false) }).strict(),
+  z.object({ ...toolsSupportedV2, updates: z.boolean() }).strict(),
 ]);
 
 export type ToolsSupportV2 = z.infer<typeof ToolsSupportV2>;
@@ -217,7 +219,7 @@ export const CacheTargetV2 = openEnum(CacheTargetV2Values);
 export type CacheTargetV2 = z.infer<typeof CacheTargetV2>;
 
 export const ImplicitCacheV2 = z.union([
-  z.boolean(),
+  z.literal(true),
   z
     .object({
       ttl: z.array(DurationStringV2).optional(),
@@ -229,7 +231,7 @@ export const ImplicitCacheV2 = z.union([
 export type ImplicitCacheV2 = z.infer<typeof ImplicitCacheV2>;
 
 export const ExplicitCacheV2 = z.union([
-  z.boolean(),
+  z.literal(true),
   z
     .object({
       ttl: z.array(DurationStringV2).optional(),
@@ -242,19 +244,17 @@ export const ExplicitCacheV2 = z.union([
 
 export type ExplicitCacheV2 = z.infer<typeof ExplicitCacheV2>;
 
-export const CacheSupportV2 = z.discriminatedUnion("supported", [
+export const CacheSupportV2 = z.union([
+  z.literal(false),
   z
     .object({
-      supported: z.literal(false),
-    })
-    .strict(),
-  z
-    .object({
-      supported: z.literal(true),
       implicit: ImplicitCacheV2.optional(),
       explicit: ExplicitCacheV2.optional(),
     })
-    .strict(),
+    .strict()
+    .refine((cache) => cache.implicit !== undefined || cache.explicit !== undefined, {
+      message: "List at least one cache kind (implicit or explicit), or set cache = false",
+    }),
 ]);
 
 export type CacheSupportV2 = z.infer<typeof CacheSupportV2>;
@@ -270,9 +270,11 @@ export const KnownServiceTierV2 = z.enum(ServiceTierV2Values);
 export const ServiceTierV2 = openEnum(ServiceTierV2Values);
 export type ServiceTierV2 = z.infer<typeof ServiceTierV2>;
 
-export const CapabilitiesV2 = z
+// Files may leave `system_updates` / `effort_updates` out, which means false.
+// The API always states them.
+export const AuthoredCapabilitiesV2 = z
   .object({
-    tools: ToolsSupportV2,
+    tools: AuthoredToolsSupportV2,
     reasoning: ReasoningSupportV2,
     cache: CacheSupportV2.optional(),
     structured_output: z.boolean().optional(),
@@ -287,6 +289,12 @@ export const CapabilitiesV2 = z
     service_tier: z.array(ServiceTierV2).optional(),
   })
   .strict();
+
+export const CapabilitiesV2 = AuthoredCapabilitiesV2.extend({
+  tools: ToolsSupportV2,
+  system_updates: z.boolean(),
+  effort_updates: z.boolean(),
+}).strict();
 
 export type CapabilitiesV2 = z.infer<typeof CapabilitiesV2>;
 
@@ -365,20 +373,38 @@ export const CompatibilityV2 = z
 
 export type CompatibilityV2 = z.infer<typeof CompatibilityV2>;
 
-export const CapabilitiesOverrideV2 = CapabilitiesV2.partial();
+export const CapabilitiesOverrideV2 = AuthoredCapabilitiesV2.partial();
 export type CapabilitiesOverrideV2 = z.infer<typeof CapabilitiesOverrideV2>;
+
+// Mid-conversation flags that hold on one API but not on others the model lists.
+// The model's top-level capabilities apply to every API.
+export const ApiCapabilitiesV2 = z
+  .object({
+    system_updates: z.boolean().optional(),
+    effort_updates: z.boolean().optional(),
+    tools: z.object({ updates: z.boolean() }).strict().optional(),
+  })
+  .strict();
+
+export type ApiCapabilitiesV2 = z.infer<typeof ApiCapabilitiesV2>;
 
 export const ApiBaseUrlV2 = z.union([
   z.string().url("Must be a valid URL"),
   z.string().regex(/^\$\{[A-Z0-9_]+\}/, "Must be a valid URL or env var template"),
 ]);
 
+// The request path appended to `base_url`, set only where a host departs from
+// its protocol's usual path: `systemone` normally posts to
+// `{base_url}/systemone`, Inception's System One API is `{base_url}/decisions`.
+export const ApiPathV2 = z.string().regex(/^\//, "Must start with /");
+
 export const ApiEntryV2 = z
   .object({
     base_url: ApiBaseUrlV2,
+    path: ApiPathV2.optional(),
     sdk: SdkV2.optional(),
     compatibility: CompatibilityV2.optional(),
-    capabilities: CapabilitiesOverrideV2.optional(),
+    capabilities: ApiCapabilitiesV2.optional(),
   })
   .strict();
 
@@ -400,6 +426,10 @@ export const ApiProtocolV2Values = [
   "videos",
   "realtime",
   "live",
+  // Google Live API: the `BidiGenerateContent` WebSocket.
+  "bidi-generate-content",
+  // Google Lyria RealTime: the `BidiGenerateMusic` WebSocket.
+  "bidi-generate-music",
   "rerank",
   "speech",
   "transcriptions",
@@ -728,7 +758,7 @@ export type ModelV2 = z.infer<typeof ModelV2>;
 // (reasoning controls, structured output, cache, service tiers…) is per provider.
 export const LabCapabilitiesV2 = z
   .object({
-    tools: ToolsSupportV2,
+    tools: AuthoredToolsSupportV2,
     reasoning: z.object({ supported: z.boolean() }).strict(),
     temperature: z.boolean(),
     top_p: z.boolean(),
@@ -766,6 +796,16 @@ export const LabModelV2 = z
 
 export type LabModelV2 = z.infer<typeof LabModelV2>;
 
+// Lab metadata file (`labs/<lab>/lab.toml`): facts about the lab itself, shown
+// on the website's lab pages. Not part of the v1 or v2 API output.
+export const LabMetadataV2 = z
+  .object({
+    description: z.string().min(1, "Lab description cannot be empty"),
+  })
+  .strict();
+
+export type LabMetadataV2 = z.infer<typeof LabMetadataV2>;
+
 // `sdk.opencodeai` (and provider.toml's `opencodeai`) is an `@opencode/ai` entry
 // point: `@opencode/ai/providers/<path>` for a provider's chat, responses or
 // messages model (`@opencode/ai/providers/openai/chat`), or
@@ -787,10 +827,12 @@ export const OpencodePackageV2 = z.union([
 // complete list, in order, and replace the provider's default API. Anything a
 // table leaves out comes from the provider: `base_url` from `api` (or the SDK's
 // default URL), `sdk.aisdk` from `npm`, `sdk.opencodeai` from `opencodeai`.
-// `"none"` stops a package from being filled in. v1 only gets the first table.
+// `"none"` stops a package from being filled in. v1 only gets the first table,
+// and never its `path`.
 export const AuthoredApiEntryV2 = z
   .object({
     base_url: ApiBaseUrlV2.optional(),
+    path: ApiPathV2.optional(),
     sdk: z
       .object({
         aisdk: z.string().min(1).optional(),
@@ -801,6 +843,7 @@ export const AuthoredApiEntryV2 = z
     compatibility: CompatibilityV2.pick({ reasoning_field: true, replay_reasoning: true })
       .strict()
       .optional(),
+    capabilities: ApiCapabilitiesV2.optional(),
     // Legacy, v1-only: the v1 `provider.shape` of a file that states its SDK's
     // default protocol (Responses on `@ai-sdk/openai`). It only keeps that
     // published v1 field unchanged; the v2 API never emits it.

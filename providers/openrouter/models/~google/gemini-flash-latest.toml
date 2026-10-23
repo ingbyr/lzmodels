@@ -24,11 +24,19 @@ structured_output = true
 temperature = true
 system_updates = false
 effort_updates = false
-cache = { supported = true, implicit = true, explicit = { ttl = ["5m"], max_breakpoints = 1 } }
+cache = { implicit = true, explicit = { ttl = ["5m"], max_breakpoints = 1 } }
 
 [limit]
 context = 1_048_576
 output = 65_536
+
+[api.chat-completions]
+
+[api.responses]
+sdk = { aisdk = "@ai-sdk/openai", opencodeai = "@opencode/ai/providers/openai-compatible/responses" }
+
+[api.messages]
+sdk = { aisdk = "@ai-sdk/anthropic", opencodeai = "@opencode/ai/providers/anthropic-compatible" }
 
 [cost.text.input]
 price = 0.75

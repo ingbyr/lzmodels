@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { formatModelV2, formatTomlValue, patchModelV2, providerModelToV2 } from "../src/model-file-v2.js";
-import { modelV2ToV1 } from "../src/translate.js";
+import { modelV2ToV1, readLabMetadata } from "../src/translate.js";
 
 test("patchModelV2 keeps v2 reasoning data when sync inherits reasoning from the lab", () => {
   const doc = {
@@ -9,7 +12,7 @@ test("patchModelV2 keeps v2 reasoning data when sync inherits reasoning from the
     base_model: "xai/grok-4.7",
     capabilities: {
       reasoning: { supported: true, default: { type: "effort", value: "high" }, effort: ["low", "high"] },
-      cache: { supported: true, implicit: true, explicit: false },
+      cache: { implicit: true },
     },
     cost: {
       text: { input: { price: 9 }, output: { price: 6 } },
@@ -69,6 +72,22 @@ test("a v1 shape that repeats the SDK default round-trips as legacy_shape", () =
   expect(providerModelToV2({ ...v1, provider }, "responses").api).toEqual({
     responses: { base_url: "https://example.com/v1", sdk: { aisdk: "@ai-sdk/openai" } },
   });
+});
+
+test("an API table without its own aisdk takes the provider's npm for its v1 shape", () => {
+  const toml = { schema: 2, id: "m", base_model: "openai/gpt-5.5", api: { responses: {}, "chat-completions": {} } };
+  // On a Responses-default SDK, a leading Responses table is the default and has no v1 shape.
+  expect(modelV2ToV1(toml, {}, "@ai-sdk/openai").provider).toBeUndefined();
+  // Elsewhere it still publishes one.
+  expect(modelV2ToV1(toml, {}, "@ai-sdk/openai-compatible").provider).toEqual({ shape: "responses" });
+  expect(modelV2ToV1(toml).provider).toEqual({ shape: "responses" });
+
+  // The writer keeps a redundant v1 shape as legacy_shape, judged against the provider's npm.
+  const v1 = { base_model: "openai/gpt-5.5", provider: { shape: "responses" } };
+  const doc = providerModelToV2(v1, undefined, "@ai-sdk/openai");
+  expect(doc.api).toEqual({ responses: { legacy_shape: "responses" } });
+  const back = modelV2ToV1({ ...(Bun.TOML.parse(formatModelV2(doc)) as Record<string, unknown>), id: "m" }, {}, "@ai-sdk/openai");
+  expect(back.provider).toEqual(v1.provider);
 });
 
 test("legacy_shape must name the protocol of its [api.<protocol>] table", () => {
@@ -205,6 +224,29 @@ test('patchModelV2 keeps aisdk = "none" when sync rewrites the first table', () 
   });
 });
 
+test("patchModelV2 keeps the first table's path when sync rewrites it", () => {
+  const api = { systemone: { base_url: "https://example.com/v1", path: "/decisions" } };
+  const doc = { schema: 2, base_model: "typesafe/jev-1.13", api, cost: { text: { input: { price: 1 }, output: { price: 2 } } } };
+  const before = modelV2ToV1({ ...doc, id: "m" });
+  expect(before.provider).toEqual({ api: "https://example.com/v1" });
+  const { id: _id, ...after } = { ...before, provider: { api: "https://example.com/v2" } };
+  expect(Object.entries(patchModelV2(doc, before, after).api.systemone)).toEqual([
+    ["base_url", "https://example.com/v2"],
+    ["path", "/decisions"],
+  ]);
+});
+
+test("patchModelV2 keeps the first table's capabilities when sync rewrites it", () => {
+  const api = { messages: { base_url: "https://example.com/v1", capabilities: { effort_updates: true } } };
+  const doc = { schema: 2, base_model: "anthropic/claude-opus-5-5", api, cost: { text: { input: { price: 1 }, output: { price: 2 } } } };
+  const before = modelV2ToV1({ ...doc, id: "m" });
+  const { id: _id, ...after } = { ...before, provider: { ...before.provider, api: "https://example.com/v2" } };
+  expect(patchModelV2(doc, before, after).api.messages).toEqual({
+    base_url: "https://example.com/v2",
+    capabilities: { effort_updates: true },
+  });
+});
+
 test("web search prices are written to v2 files, kept by patches, and left out of v1", () => {
   const doc = {
     schema: 2,
@@ -261,4 +303,21 @@ test("v1 mode prices come from an object factor the same way as from a plain num
   expect(mode({ text: 2, audio: 2 })).toEqual(expected);
   // Prices an object factor doesn't name keep their base price.
   expect(mode({ text: { output: 2 } })).toEqual({ input: 4, output: 40, cache_read: 0.4, cache_write: 5, input_audio: 6 });
+});
+
+test("readLabMetadata reads a v2 lab.toml and rejects v1 or unknown fields", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "lab-metadata-"));
+  const write = (name: string, body: string) => {
+    const file = path.join(dir, name);
+    writeFileSync(file, body);
+    return file;
+  };
+  try {
+    expect(readLabMetadata(write("v2.toml", 'schema = 2\ndescription = "A lab."\n'))).toEqual({ description: "A lab." });
+    expect(() => readLabMetadata(write("v1.toml", 'description = "A lab."\n'))).toThrow("schema = 2");
+    expect(() => readLabMetadata(write("extra.toml", 'schema = 2\ndescription = "A lab."\nname = "Lab"\n'))).toThrow();
+    expect(() => readLabMetadata(write("empty.toml", 'schema = 2\ndescription = ""\n'))).toThrow();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

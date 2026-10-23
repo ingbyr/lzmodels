@@ -78,7 +78,7 @@ reasoning = { supported = true, effort = ["low", "medium", "high", "xhigh", "max
 structured_output = true
 system_updates = true
 effort_updates = true
-cache = { supported = true, implicit = false, explicit = { ttl = ["5m", "1h"], max_breakpoints = 4, targets = ["tools", "system", "messages"], min_tokens = 512 } }
+cache = { explicit = { ttl = ["5m", "1h"], max_breakpoints = 4, targets = ["tools", "system", "messages"], min_tokens = 512 } }
 service_tier = ["fast"]
 
 [cost.text.input]
@@ -96,7 +96,13 @@ factor = 2
 body = { speed = "fast" }
 ```
 
-- Mid-conversation flags record what the API accepts (per its docs, confirmed live), not whether the model obeys: `system_updates` (system/developer messages after the conversation starts, sent in place), `effort_updates` (a per-turn effort change that keeps the cache, e.g. OpenAI `configuration_update`, Anthropic per-message `output_config`), `tools.updates` (adding/removing tools mid-conversation while keeping the cache, e.g. Anthropic `tool_addition`/`tool_removal`, OpenAI Responses `additional_tools`). Tool search is `tools.search`.
+- `cache = false` means the host doesn't cache prompts. Otherwise list the kinds it supports, `implicit` and/or `explicit`, each `true` or a details table. A kind that isn't listed isn't supported. If a host caches but doesn't say how, use `{ implicit = true }`; Anthropic-style caching that needs `cache_control` markers is `explicit`.
+- Mid-conversation flags record what the API accepts, not whether the model obeys. Each one needs a message sent inside the conversation history; changing a top-level request parameter between turns never counts, even if the cache happens to survive.
+  - `system_updates`: the API accepts a system/developer message after the conversation starts and keeps it in place (the cache before it survives; moved to the top or rejected = false).
+  - `effort_updates`: a message in the history changes effort for the next turn and keeps the cache: OpenAI Responses `configuration_update`, Anthropic per-message `output_config`. Changing `reasoning_effort`, a thinking toggle or a budget on the next request doesn't count.
+  - `tools.updates`: a message in the history adds (or removes) tools and keeps the cache: Anthropic `tool_addition`/`tool_removal`, OpenAI Responses `additional_tools`, Kimi K3's tool-carrying system message. Add-only counts; note "add only" in the file comment. Changing the top-level `tools` list doesn't count. Tool search is `tools.search`.
+- These three flags default to false. Be conservative: set one to `true` only when the host has an explicit, documented way to do it (or passes requests through to a lab that documents it) and you're sure it works there; confirm live when you can. A server that happens to keep the cache isn't enough. Otherwise leave it out (don't write `= false`). The v2 API always publishes them as `true` or `false`, with a left-out flag published as `false`.
+- Put a flag at the top level only when it holds on every API the model lists. When it holds on some of them only, leave the top level out and set it on those APIs instead, e.g. `[api.messages]` with `capabilities = { effort_updates = true }` (`system_updates`, `effort_updates` and `tools = { updates = true }` are allowed there).
 - A mode without a cost takes the base prices times the multiplier for its service tier: the mode's `service_tier`, or its name when unset (OpenAI's `fast` mode sets `service_tier = "priority"`).
 - Web search fees go in `[cost.web_search]`: `price` is USD per 1,000 searches (or search requests, as the host bills them). Prices by search depth are `[[cost.web_search.overrides]]` with `when = { search_context_size = { equals = "high" } }`. v1 has no web search price.
 - A plain-number multiplier `factor` (`factor = 1.1`) multiplies every price, `web_search` included; the object form (`factor = { text = 1.1, audio = 1.1 }`) multiplies only the prices it names, so use it when the host's multiplier covers token prices only.
@@ -104,7 +110,7 @@ body = { speed = "fast" }
 
 ### APIs (`[api.<protocol>]`)
 
-A model's `[api.<protocol>]` tables (`chat-completions`, `responses`, `messages`, …) are its complete list of APIs, in order, and replace the provider's default API. Each table can set `base_url`, `sdk = { aisdk, opencodeai }` and `compatibility.reasoning_field` / `replay_reasoning`; anything left out comes from the provider (`base_url` from `api` or the SDK's default URL, `sdk.aisdk` from `npm`, `sdk.opencodeai` from the provider's `opencodeai`, but only when the table takes the provider's `npm`: a table naming another `aisdk` must name its own `opencodeai` or gets none). v1 only reads the first table, as its `provider` and `interleaved` fields.
+A model's `[api.<protocol>]` tables (`chat-completions`, `responses`, `messages`, …) are its complete list of APIs, in order, and replace the provider's default API. Each table can set `base_url`, `path`, `sdk = { aisdk, opencodeai }` and `compatibility.reasoning_field` / `replay_reasoning`; anything left out comes from the provider (`base_url` from `api` or the SDK's default URL, `sdk.aisdk` from `npm`, `sdk.opencodeai` from the provider's `opencodeai`, but only when the table takes the provider's `npm`: a table naming another `aisdk` must name its own `opencodeai` or gets none). v1 only reads the first table, as its `provider` and `interleaved` fields.
 
 ```toml
 [api.chat-completions]
@@ -113,6 +119,8 @@ compatibility = { reasoning_field = "reasoning_content" }
 
 - `opencodeai` (provider.toml's top-level field, or `sdk.opencodeai`) is an `@opencode/ai` entry point: `@opencode/ai/providers/<path>` (e.g. `@opencode/ai/providers/openai/chat`), or `@opencode/ai/protocols/<name>` for APIs with no provider entry point (`openai-images`, `openai-speech`, `openai-transcription`). v1 never publishes it.
 - `"none"` in `sdk.aisdk`, `sdk.opencodeai` or the provider's `opencodeai` says no package supports that API: nothing is filled in (e.g. `sdk = { aisdk = "none" }` on a decision model's `[api.systemone]`).
+- `path` is the request path appended to `base_url`, set only when a host departs from its protocol's usual path. `systemone` normally posts to `{base_url}/systemone`; Inception serves the same body at `/v1/decisions`, so its `[api.systemone]` sets `base_url = "https://api.inceptionlabs.ai/v1"` and `path = "/decisions"`. v1 never publishes it.
+- Name the protocol by its wire format, not the model type, nor the host's path. `decisions` is only OpenAI's Decisions format; every host that takes System One's `{model, state, questions}` body is `systemone`, whatever its path. `realtime` is OpenAI's Realtime API; Google's Live API is `bidi-generate-content` and Lyria RealTime is `bidi-generate-music` (after their `BidiGenerateContent` / `BidiGenerateMusic` WebSocket methods).
 - `legacy_shape = "responses" | "completions"` is v1-only: it keeps a v1 `provider.shape` that repeats the SDK's default. Sync writes and keeps it; don't add it by hand.
 
 ## When to use `base_model` (blocker)
@@ -193,6 +201,15 @@ A v1-only alias provider (for example `azure-cognitive-services`) has a `provide
 ### Sync modules (recommended, not a blocker)
 
 If the provider has a rich catalog API that can populate model data or authoritatively remove models it no longer serves, add a sync module (see `sync.md`). Thin endpoints stay hand-authored. Sync patches files in place: it updates the fields it owns and keeps everything else (cache, overrides, multipliers, cache TTLs). If a patch can't reproduce the synced fields, sync leaves the file and reports a notice.
+
+## Lab pages (`labs/<lab-id>/`)
+
+A lab's `logo.svg` (same rules as provider logos) and optional `lab.toml` feed the website's lab pages only; neither is in the v1 or v2 API. `lab.toml` is v2 and holds just the lab's description:
+
+```toml
+schema = 2
+description = "One or two sentences on what the lab builds."
+```
 
 ## Cost (always USD)
 

@@ -10,6 +10,7 @@ import {
   buildCloudflareAiGatewayModel,
   cloudflareAiGateway,
   deriveReasoningOptions,
+  gatewayApis,
   mediaCost,
   routeModalities,
 } from "../src/sync/providers/cloudflare-ai-gateway.js";
@@ -87,7 +88,10 @@ test("builds Cloudflare AI Gateway overrides from catalog metadata", () => {
       }],
     },
     limit: { context: 1_050_000 },
-    provider: { npm: "@ai-sdk/openai" },
+    provider: {
+      npm: "@ai-sdk/openai",
+      api: "https://gateway.ai.cloudflare.com/v1/${CLOUDFLARE_ACCOUNT_ID}/${CLOUDFLARE_GATEWAY_ID}/openai",
+    },
   });
 });
 
@@ -622,13 +626,14 @@ test("writes new native-route models as v2 files with their API protocol", async
     const opus = await readFile(path.join(modelsDir, "anthropic", "claude-opus-4.7.toml"), "utf8");
     expect(opus).toContain("\nschema = 2\n");
     const opencodeai = 'opencodeai = "@opencode/ai/providers/cloudflare-ai-gateway"';
-    expect(opus).toContain(`[api.messages]\nsdk = { aisdk = "@ai-sdk/anthropic", ${opencodeai} }`);
+    const native = "https://gateway.ai.cloudflare.com/v1/${CLOUDFLARE_ACCOUNT_ID}/${CLOUDFLARE_GATEWAY_ID}";
+    expect(opus).toContain(`[api.messages]\nbase_url = "${native}/anthropic/v1"\nsdk = { aisdk = "@ai-sdk/anthropic", ${opencodeai} }`);
     const gpt = await readFile(path.join(modelsDir, "openai", "gpt-5.5.toml"), "utf8");
-    expect(gpt).toContain(`[api.responses]\nsdk = { aisdk = "@ai-sdk/openai", ${opencodeai} }`);
+    expect(gpt).toContain(`[api.responses]\nbase_url = "${native}/openai"\nsdk = { aisdk = "@ai-sdk/openai", ${opencodeai} }`);
     // An existing table gets the OpenCode package too, and keeps its other v2 data.
     const updated = await readFile(path.join(modelsDir, "openai", "gpt-4.1.toml"), "utf8");
     expect(updated).toContain("system_updates = true");
-    expect(updated).toContain(`[api.responses]\nsdk = { aisdk = "@ai-sdk/openai", ${opencodeai} }`);
+    expect(updated).toContain(`base_url = "${native}/openai"\nsdk = { aisdk = "@ai-sdk/openai", ${opencodeai} }`);
     expect(await syncProvider(provider)).toMatchObject({ created: 0, updated: 0, deleted: 0 });
   } finally {
     await rm(providerDir, { recursive: true, force: true });
@@ -1042,3 +1047,47 @@ function restoreEnv(name: string, value: string | undefined) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
+
+test("lists a REST table for every other request format the catalog gives a gateway model", () => {
+  const main = "@opencode/ai/providers/cloudflare-ai-gateway";
+  const base_url = "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1";
+  // OpenAI: the native Responses route stays first; Chat Completions goes through REST.
+  const openai = gatewayApis({ responses: { sdk: { aisdk: "@ai-sdk/openai" } } }, "responses", ["responses", "chat-completions"]);
+  expect(openai).toEqual({
+    responses: { sdk: { aisdk: "@ai-sdk/openai", opencodeai: main } },
+    "chat-completions": { base_url, sdk: { aisdk: "@ai-sdk/openai-compatible", opencodeai: main } },
+  });
+  expect(gatewayApis(openai, "responses", ["responses", "chat-completions"])).toEqual(openai);
+  // A Responses-only model keeps its default Chat Completions table first.
+  expect(gatewayApis(undefined, undefined, ["responses"])).toEqual({
+    "chat-completions": {},
+    responses: { base_url, sdk: { aisdk: "@ai-sdk/openai", opencodeai: main } },
+  });
+  expect(gatewayApis(undefined, undefined, ["chat-completions", "anthropic-messages"])).toEqual({
+    "chat-completions": {},
+    messages: { base_url, sdk: { aisdk: "@ai-sdk/anthropic", opencodeai: main } },
+  });
+  // One format and no table: nothing to write. An existing first table is kept.
+  expect(gatewayApis(undefined, undefined, ["chat-completions"])).toBeUndefined();
+  const systemone = { systemone: { sdk: { aisdk: "none" } } };
+  expect(gatewayApis(systemone, undefined, null)).toEqual(systemone);
+});
+
+test("lists decision models on the /ai/run API", () => {
+  const translated = cloudflareAiGateway.translateModel({
+    catalog: {
+      model_id: "typesafe/jev-1.14.0",
+      task: "Text Generation" as const,
+      provider_details: providerDetails({ input_tokens: 0.042, output_tokens: 0 }),
+      request_formats: ["chat-completions"],
+    },
+  }, { authored: () => undefined, existing: () => undefined }) as { v2Set: { api: (current: unknown) => unknown } };
+  const run = {
+    "workers-ai-run": {
+      base_url: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai",
+      sdk: { opencodeai: "none" },
+    },
+  };
+  expect(translated.v2Set.api(undefined)).toEqual(run);
+  expect(translated.v2Set.api({ systemone: { sdk: { aisdk: "none" } } })).toEqual(run);
+});

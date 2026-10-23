@@ -715,6 +715,42 @@ sdk = { aisdk = "none" }
     });
   });
 
+  test("a table's path is published in v2 and never in v1", async () => {
+    await withFixture(async (root) => {
+      await write(root, "providers/gateway/provider.toml", provider());
+      await write(
+        root,
+        "providers/gateway/models/model.toml",
+        model(`
+[api.systemone]
+base_url = "https://decide.example.com/v1"
+path = "/decisions"
+`),
+      );
+
+      const v1 = await generate(path.join(root, "providers"));
+      expect(v1.gateway?.models.model?.provider).toEqual({ api: "https://decide.example.com/v1" });
+      expect(JSON.stringify(v1)).not.toContain("/decisions");
+
+      const v2 = await generateV2(path.join(root, "providers"));
+      expect(v2.gateway?.models.model?.api).toEqual({
+        systemone: {
+          base_url: "https://decide.example.com/v1",
+          path: "/decisions",
+          sdk: { aisdk: "@ai-sdk/openai-compatible" },
+        },
+      });
+    });
+  });
+
+  test("rejects a path that doesn't start with /", async () => {
+    await withFixture(async (root) => {
+      await write(root, "providers/gateway/provider.toml", provider());
+      await write(root, "providers/gateway/models/model.toml", model(`\n[api.systemone]\npath = "decisions"\n`));
+      await expect(generateV2(path.join(root, "providers"))).rejects.toThrow("Must start with /");
+    });
+  });
+
   test("rejects an opencodeai that isn't an @opencode/ai entry point", async () => {
     await withFixture(async (root) => {
       await write(root, "providers/gateway/provider.toml", provider('opencodeai = "@opencode/ai/openai"\n'));

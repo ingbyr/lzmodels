@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import {
   AuthoredModelV2,
+  LabMetadataV2,
   LabModelV2,
   type AuthoredApiEntryV2,
   type CostFactorV2,
@@ -26,6 +27,22 @@ export function readProviderModel(filePath: string) {
   const toml = Bun.TOML.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
   const { id: _id, ...model } = modelV2ToV1({ ...toml, id: "" }, { modelPath: filePath });
   return model;
+}
+
+// Reads a lab metadata file (`labs/<lab>/lab.toml`). It has no v1 form, so it
+// must declare `schema = 2`.
+export function readLabMetadata(filePath: string): LabMetadataV2 {
+  const toml = Bun.TOML.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  if (!isSchemaV2(toml)) {
+    throw new Error(`Lab metadata must be v2. Add \`schema = 2\` to ${filePath}`);
+  }
+  const { schema: _schema, ...raw } = toml;
+  const parsed = LabMetadataV2.safeParse(raw);
+  if (!parsed.success) {
+    parsed.error.cause = { labPath: filePath, toml };
+    throw parsed.error;
+  }
+  return parsed.data;
 }
 
 // Reads a provider.toml as v1 fields: `opencodeai` (the default API's OpenCode
@@ -80,10 +97,12 @@ export function labModelV2ToV1(
 
 // Translates a v2 provider model file into the v1 authored fields it stands for.
 // v2-only data (MIME modalities, cache TTLs, service tiers…) has no v1 field and
-// is left out; the v2 output reads it from the file directly.
+// is left out; the v2 output reads it from the file directly. `providerNpm` is
+// the provider's `npm`, which a first API table without its own `aisdk` uses.
 export function modelV2ToV1(
   toml: Record<string, unknown>,
   cause: Record<string, unknown> = {},
+  providerNpm?: string,
 ): Record<string, unknown> {
   const { schema: _schema, ...raw } = toml;
   const parsed = AuthoredModelV2.safeParse(raw);
@@ -128,7 +147,7 @@ export function modelV2ToV1(
     status: model.status,
     cost,
     experimental: toV1Experimental(model, cost),
-    ...toV1Api(model.api),
+    ...toV1Api(model.api, providerNpm),
   }));
 }
 
@@ -165,8 +184,9 @@ function withoutReasoningPrice(cost: unknown): unknown {
 // `interleaved` its reasoning requirement. With several `[api.<protocol>]`
 // tables, the first one in the file is the default and becomes the v1 API.
 // The protocol only becomes a v1 `shape` where it isn't the SDK's default
-// (OpenAI and Azure default to Responses), unless `legacy_shape` keeps one.
-function toV1Api(api: Record<string, AuthoredApiEntryV2> | undefined) {
+// (OpenAI, Azure and xAI default to Responses), unless `legacy_shape` keeps one. A
+// table without its own `aisdk` takes the provider's.
+function toV1Api(api: Record<string, AuthoredApiEntryV2> | undefined, providerNpm?: string) {
   const first = Object.entries(api ?? {})[0];
   if (first === undefined) return {};
   const [protocol, { base_url, sdk, compatibility, legacy_shape }] = first;
@@ -175,7 +195,7 @@ function toV1Api(api: Record<string, AuthoredApiEntryV2> | undefined) {
   if (legacy_shape !== undefined && toProtocol(legacy_shape) !== protocol) {
     throw new Error(`legacy_shape = "${legacy_shape}" doesn't match [api.${protocol}]`);
   }
-  const shape = legacy_shape ?? toV1Shape(protocol, npm);
+  const shape = legacy_shape ?? toV1Shape(protocol, sdk?.aisdk === undefined ? providerNpm : npm);
   const provider = withoutUndefined({ npm, api: base_url, shape });
   const field = compatibility?.reasoning_field;
   return withoutUndefined({
@@ -185,8 +205,10 @@ function toV1Api(api: Record<string, AuthoredApiEntryV2> | undefined) {
 }
 
 // The v1 `shape` a protocol gets on an SDK: none where it's the SDK's default.
+// `@ai-sdk/openai`, `@ai-sdk/azure` and `@ai-sdk/xai` default to Responses (`createXai().languageModel`
+// is `createResponsesLanguageModel` in packages/xai/src/xai-provider.ts).
 export function toV1Shape(protocol: string, npm: string | undefined) {
-  const responsesByDefault = npm === "@ai-sdk/openai" || npm === "@ai-sdk/azure";
+  const responsesByDefault = npm === "@ai-sdk/openai" || npm === "@ai-sdk/azure" || npm === "@ai-sdk/xai";
   if (protocol === "responses" && !responsesByDefault) return "responses";
   if (protocol === "chat-completions" && responsesByDefault) return "completions";
   return undefined;

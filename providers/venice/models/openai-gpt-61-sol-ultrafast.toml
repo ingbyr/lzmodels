@@ -20,8 +20,14 @@ reasoning = { supported = true, effort = ["low", "medium", "high", "xhigh", "max
 structured_output = true
 system_updates = false
 effort_updates = false
-cache = { supported = true, implicit = true }
+cache = { implicit = true }
 prompt_cache_key = true
+
+[api.chat-completions]
+
+[api.responses]
+base_url = "https://api.venice.ai/api/v1"
+sdk = { aisdk = "@ai-sdk/openai", opencodeai = "@opencode/ai/providers/openai-compatible/responses" }
 
 [cost.text.input]
 price = 12
@@ -38,3 +44,6 @@ price = 60
 [[cost.text.output.overrides]]
 when = { context = { gt = 272_000 } }
 price = 90
+
+[cost.web_search]
+price = 10
