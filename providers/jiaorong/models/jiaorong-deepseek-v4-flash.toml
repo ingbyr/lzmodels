@@ -1,12 +1,11 @@
 # Toggle: enable_thinking true|false
 # Budget: thinking_budget (integer reasoning tokens)
+schema = 2
+base_model = "deepseek/deepseek-v4-flash"
 name = "jiaorong-deepseek-v4-flash"
-base_model="deepseek/deepseek-v4-flash"
 
-reasoning_options = [
-  { type = "toggle" },
-  { type = "budget_tokens" },
-]
+[capabilities]
+reasoning = { supported = true, toggle = true, budget = {} }
 
-[interleaved]
-field = "reasoning_content"
+[api.chat-completions]
+compatibility = { reasoning_field = "reasoning_content" }
