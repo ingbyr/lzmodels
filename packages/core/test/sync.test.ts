@@ -67,6 +67,7 @@ import {
   resolveCanonicalBaseModel,
   catalogCost,
   overrideWhen,
+  withSystemOneImageInput,
   withTextApis,
   type OpenRouterModel,
 } from "../src/sync/providers/openrouter.js";
@@ -6444,7 +6445,7 @@ test("Vercel text models keep their default API first and add Responses and Mess
   const fresh = chatApis(undefined);
   expect(fresh).toEqual({ "chat-completions": {}, ...extra });
   expect(Object.keys(fresh)).toEqual(["chat-completions", "responses", "messages"]);
-  const own = { "chat-completions": { compatibility: { replay_reasoning: true } } };
+  const own = { "chat-completions": { legacy_interleaved: true } };
   expect(chatApis(own)).toEqual({ ...own, ...extra });
   // A second run changes nothing.
   expect(chatApis(chatApis(own))).toEqual(chatApis(own));
@@ -7581,8 +7582,12 @@ test("syncs OpenRouter decision models with no supported parameters as decision 
   // v1 reads the first API's package (systemone's) as the provider npm.
   expect(translated?.model.provider).toEqual({ npm: "@ai-sdk/typesafe-ai" });
   // /api/alpha/decisions takes the same System One body, so only /api/v1/systemone is listed.
+  // OpenRouter reads images as `image_url` items in a `state` list.
   expect(translated?.v2Set?.api).toEqual({
-    systemone: { sdk: { aisdk: "@ai-sdk/typesafe-ai", opencodeai: "@opencode/ai/providers/openrouter" } },
+    systemone: {
+      sdk: { aisdk: "@ai-sdk/typesafe-ai", opencodeai: "@opencode/ai/providers/openrouter" },
+      compatibility: { image_input: "state" },
+    },
   });
   const chat = openrouter.translateModel(openRouterModel(), {
     existing: () => undefined,
@@ -7616,6 +7621,17 @@ test("lists Responses and Messages after the first API for OpenRouter text-only 
     architecture: { input_modalities: ["text", "audio"], output_modalities: ["text", "audio"] },
   }), translateContext);
   expect(audio?.v2Set).not.toHaveProperty("api");
+});
+
+test("OpenRouter and NanoGPT mark System One tables of image models with image_input = state", () => {
+  const sdk = { aisdk: "@ai-sdk/typesafe-ai" };
+  const once = withSystemOneImageInput({ systemone: { sdk } }, true);
+  expect(once).toEqual({ systemone: { sdk, compatibility: { image_input: "state" } } });
+  expect(withSystemOneImageInput(once, true)).toEqual(once);
+  // A text-only model loses the field, and other tables are left alone.
+  expect(withSystemOneImageInput({ ...(once as object), "chat-completions": {} }, false))
+    .toEqual({ systemone: { sdk }, "chat-completions": {} });
+  expect(withSystemOneImageInput(undefined, true)).toBeUndefined();
 });
 
 test("lists the Images API next to chat for OpenRouter chat models with an image lab", () => {
@@ -8201,9 +8217,8 @@ test("Hugging Face creates v2 files with host data only and the lab's exact MIME
       output: ["text"],
     },
     capabilities: {
-      tools: { supported: true, updates: false },
+      tools: { supported: true },
       structured_output: true,
-      effort_updates: false,
     },
     cost: { text: { input: { price: 0.4 }, output: { price: 3.2 } } },
     api: { "chat-completions": {}, responses: { sdk: { aisdk: "@ai-sdk/openai", opencodeai: "@opencode/ai/providers/openai-compatible/responses" } } },

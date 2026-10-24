@@ -20,7 +20,7 @@ schema = 2
 base_model = "alibaba/qwen3.8-max"
 
 [capabilities]
-tools = { supported = true, updates = false }
+tools = { supported = true }
 reasoning = { supported = true, default = { type = "effort", value = "xhigh" }, toggle = true, effort = ["low", "medium", "xhigh"], budget = { min = 0, max = 262_144 } }
 structured_output = true
 stream_usage = true
@@ -39,7 +39,7 @@ sdk = { aisdk = "@ai-sdk/anthropic", opencodeai = "@opencode/ai/providers/alibab
 
 [cost.text.input]
 price = 2
-cache = { read = 0.25, write = 2.5, explicit = { read = 0.17 } }
+cache = { read = 0.25, explicit = { read = 0.17, write = 2.5 } }
 
 [cost.text.output]
 price = 6

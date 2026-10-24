@@ -9,7 +9,7 @@ v2_only = true
 base_model = "alibaba/qwen3.8-2.4t-a95b"
 
 [capabilities]
-tools = { supported = true, updates = false }
+tools = { supported = true }
 reasoning = { supported = true, default = { type = "effort", value = "xhigh" }, effort = ["low", "medium", "xhigh"], budget = { min = 0, max = 262_144 } }
 structured_output = true
 stream_usage = true
@@ -27,7 +27,7 @@ sdk = { aisdk = "@ai-sdk/anthropic", opencodeai = "@opencode/ai/providers/alibab
 
 [cost.text.input]
 price = 1.65
-cache = { read = 0.20625, write = 2.0625, explicit = { read = 0.1375 } }
+cache = { read = 0.20625, explicit = { read = 0.1375, write = 2.0625 } }
 
 [cost.text.output]
 price = 4.951

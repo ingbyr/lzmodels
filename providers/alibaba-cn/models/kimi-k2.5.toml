@@ -18,7 +18,7 @@ input = ["text", "image/bmp", "image/jpeg", "image/png", "image/tiff", "image/we
 output = ["text"]
 
 [capabilities]
-tools = { supported = true, updates = false }
+tools = { supported = true }
 reasoning = { supported = true, default = { type = "toggle", value = false }, toggle = true, budget = { max = 81_920 } }
 structured_output = false
 temperature = true
@@ -39,7 +39,7 @@ sdk = { aisdk = "@ai-sdk/anthropic", opencodeai = "@opencode/ai/providers/alibab
 
 [cost.text.input]
 price = 0.574
-cache = { read = 0.1148, write = 0.7175, explicit = { read = 0.0574 } }
+cache = { read = 0.1148, explicit = { read = 0.0574, write = 0.7175 } }
 
 [cost.text.output]
 price = 3.011

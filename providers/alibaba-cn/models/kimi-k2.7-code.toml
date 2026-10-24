@@ -9,7 +9,7 @@ v2_only = true
 base_model = "moonshotai/kimi-k2.7-code"
 
 [capabilities]
-tools = { supported = true, updates = false }
+tools = { supported = true }
 reasoning = { supported = true, budget = {} }
 top_k = false
 stream_usage = true
@@ -24,7 +24,7 @@ sdk = { aisdk = "@ai-sdk/anthropic", opencodeai = "@opencode/ai/providers/alibab
 
 [cost.text.input]
 price = 0.894
-cache = { read = 0.1788, write = 1.1175, explicit = { read = 0.0894 } }
+cache = { read = 0.1788, explicit = { read = 0.0894, write = 1.1175 } }
 
 [cost.text.output]
 price = 3.713
