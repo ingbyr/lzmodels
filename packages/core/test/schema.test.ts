@@ -150,6 +150,13 @@ describe("v2 API tables", () => {
     ]);
   });
 
+  test("max_tokens_field is only allowed on chat-completions tables", () => {
+    expect(issues({ "chat-completions": { compatibility: { max_tokens_field: "max_tokens" } } })).toEqual([]);
+    expect(issues({ messages: { compatibility: { max_tokens_field: "max_tokens" } } })).toEqual([
+      "api.messages.compatibility.max_tokens_field: compatibility.max_tokens_field is only allowed on [api.chat-completions], not [api.messages]",
+    ]);
+  });
+
   test("reasoning_field is only allowed on chat-completions tables", () => {
     expect(issues({ "chat-completions": { compatibility: { reasoning_field: "reasoning_content" } } })).toEqual([]);
     expect(issues({ responses: { compatibility: { reasoning_field: "reasoning_content" } } })).toEqual([

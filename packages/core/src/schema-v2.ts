@@ -366,6 +366,8 @@ export type MaxTokensFieldV2 = z.infer<typeof MaxTokensFieldV2>;
 export const CompatibilityV2 = z
   .object({
     reasoning_field: ReasoningFieldV2.optional(),
+    // `chat-completions` only: the field that caps output tokens. Unset means OpenAI's current
+    // `max_completion_tokens`; "max_tokens" marks hosts that only take the older field.
     max_tokens_field: MaxTokensFieldV2.optional(),
     // `systemone` only: where the host wants images. "assets" (the default):
     // TypeSafe's `assets` map, referenced from strings, with the
@@ -844,7 +846,7 @@ export const AuthoredApiEntryV2 = z
       })
       .strict()
       .optional(),
-    compatibility: CompatibilityV2.pick({ reasoning_field: true })
+    compatibility: CompatibilityV2.pick({ reasoning_field: true, max_tokens_field: true })
       .strict()
       .extend({ image_input: CompatibilityV2.shape.image_input })
       .optional(),
@@ -864,6 +866,7 @@ export type AuthoredApiEntryV2 = z.infer<typeof AuthoredApiEntryV2>;
 // Compatibility fields that only mean something on one protocol.
 const COMPATIBILITY_PROTOCOLS = {
   reasoning_field: "chat-completions",
+  max_tokens_field: "chat-completions",
   image_input: "systemone",
 } as const;
 

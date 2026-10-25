@@ -121,6 +121,7 @@ compatibility = { reasoning_field = "reasoning_content" }
 - `"none"` in `sdk.aisdk`, `sdk.opencodeai` or the provider's `opencodeai` says no package supports that API: nothing is filled in (e.g. `sdk = { aisdk = "none" }` on a decision model's `[api.systemone]`).
 - `path` is the request path appended to `base_url`, set only when a host departs from its protocol's usual path. `systemone` normally posts to `{base_url}/systemone`; Inception serves the same body at `/v1/decisions`, so its `[api.systemone]` sets `base_url = "https://api.inceptionlabs.ai/v1"` and `path = "/decisions"`. v1 never publishes it.
 - `compatibility.image_input` (v2 only, `systemone` tables only) says where a System One host wants images: `"assets"` (the default: TypeSafe's `assets` map plus the `TypeSafe-Danger-Zone-Images: true` header), `"images"` (a top-level `images` list) or `"state"` (`image_url` items in a `state` list). Set it on image models whose host isn't the default. `compatibility.reasoning_field` is only allowed on `chat-completions` tables.
+- `compatibility.max_tokens_field` (v2 only, `chat-completions` tables only) names the output-token cap field. Leave it out for hosts that take OpenAI's current `max_completion_tokens`; set `"max_tokens"` where the host only takes the older field (documented, or rejects/ignores `max_completion_tokens`).
 - Name the protocol by its wire format, not the model type, nor the host's path. `decisions` is only OpenAI's Decisions format; every host that takes System One's `{model, state, questions}` body is `systemone`, whatever its path. `realtime` is OpenAI's Realtime API; Google's Live API is `bidi-generate-content` and Lyria RealTime is `bidi-generate-music` (after their `BidiGenerateContent` / `BidiGenerateMusic` WebSocket methods).
 - `legacy_shape = "responses" | "completions"` is v1-only: it keeps a v1 `provider.shape` that repeats the SDK's default. Sync writes and keeps it; don't add it by hand.
 - `legacy_interleaved = true` is v1-only: it keeps v1's bare `interleaved: true` (replaying reasoning is the default in v2). Sync writes and keeps it; don't add it by hand.
@@ -197,6 +198,7 @@ A v1-only alias provider (for example `azure-cognitive-services`) has a `provide
 - Path: `providers/<provider-id>/logo.svg`
 - Use `currentColor` for fills/strokes; no hardcoded colors, no fixed width/height
 - Prefer square `viewBox` (e.g. `0 0 24 24`)
+- Plain drawing markup only: no scripts, event handlers, `foreignObject`, animation or links to other files (`bun validate` checks this against the allowlist in `packages/core/src/logo.ts`)
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">

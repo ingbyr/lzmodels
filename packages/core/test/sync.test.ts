@@ -797,6 +797,36 @@ test("factored NanoGPT models inherit missing intrinsic metadata without zero ov
   expect(sparse).not.toHaveProperty("modalities");
 });
 
+test("NanoGPT base_model routes use the context window when no source states an output limit", () => {
+  const model = buildNanoGptModel(nanoGptModel({
+    id: "aleph-alpha/kolibri-1",
+    context_length: 1_048_576,
+    max_output_tokens: null,
+  }), undefined);
+
+  expect(model).toMatchObject({
+    base_model: "aleph-alpha/kolibri-1",
+    limit: { output: 1_048_576 },
+  });
+});
+
+test("new NanoGPT text models use the context window when no output limit is stated", () => {
+  const text = buildNanoGptModel(nanoGptModel({
+    id: "example/unlisted-model",
+    context_length: 30_000,
+    max_output_tokens: null,
+  }), undefined);
+  const decision = buildNanoGptModel(nanoGptModel({
+    id: "example/decision-model",
+    context_length: 32_768,
+    max_output_tokens: 0,
+    architecture: { input_modalities: ["text"], output_modalities: ["decisions"] },
+  }), undefined);
+
+  expect(text).toMatchObject({ limit: { context: 30_000, output: 30_000 } });
+  expect(decision).toBeUndefined();
+});
+
 test("NanoGPT base_model files leave model facts to the lab", () => {
   const model = buildNanoGptModel(nanoGptModel({
     id: "google/gemini-2.5-pro",
@@ -8221,7 +8251,10 @@ test("Hugging Face creates v2 files with host data only and the lab's exact MIME
       structured_output: true,
     },
     cost: { text: { input: { price: 0.4 }, output: { price: 3.2 } } },
-    api: { "chat-completions": {}, responses: { sdk: { aisdk: "@ai-sdk/openai", opencodeai: "@opencode/ai/providers/openai-compatible/responses" } } },
+    api: {
+      "chat-completions": { compatibility: { max_tokens_field: "max_tokens" } },
+      responses: { sdk: { aisdk: "@ai-sdk/openai", opencodeai: "@opencode/ai/providers/openai-compatible/responses" } },
+    },
   });
   expect(doc).not.toHaveProperty("limit");
 
@@ -8256,14 +8289,20 @@ test("Hugging Face writes existing files back unchanged apart from their API tab
     authored: () => ({ base_model: "alibaba/qwen3.5-122b-a10b" }),
     v2: () => doc,
   });
-  // A file with no table gets the provider's Chat Completions API first, then Responses.
+  // A file with no table gets the provider's Chat Completions API (capped by max_tokens) first, then Responses.
   const once = translate(v2);
-  expect(once).toEqual({ id: "Qwen/Qwen3.5-122B-A10B", v2: { ...v2, api: { "chat-completions": {}, responses } } });
-  // An existing first table is kept as is, and a second run changes nothing.
+  expect(once).toEqual({
+    id: "Qwen/Qwen3.5-122B-A10B",
+    v2: { ...v2, api: { "chat-completions": { compatibility: { max_tokens_field: "max_tokens" } }, responses } },
+  });
+  // An existing first table keeps its settings and gains max_tokens_field, and a second run changes nothing.
   const first = { "chat-completions": { compatibility: { reasoning_field: "reasoning_content" } } };
   const kept = translate({ ...v2, api: first }) as { v2: Record<string, unknown> };
   expect(Object.keys(kept.v2.api as object)).toEqual(["chat-completions", "responses"]);
-  expect(kept.v2.api).toEqual({ ...first, responses });
+  expect(kept.v2.api).toEqual({
+    "chat-completions": { compatibility: { reasoning_field: "reasoning_content", max_tokens_field: "max_tokens" } },
+    responses,
+  });
   expect(translate(kept.v2)).toEqual(kept);
   expect(huggingface.translateModel(huggingFaceModel({ providers: [] }), {
     existing: () => undefined,

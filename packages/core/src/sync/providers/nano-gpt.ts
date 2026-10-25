@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { inferKimiFamily, ModelFamilyValues } from "../../family.js";
 import type { ExistingModel, SyncProvider, SyncedFullModel, SyncedModel } from "../index.js";
-import { factorBaseModel, resolveModelMetadataBaseModel, withSystemOneImageInput } from "./openrouter.js";
+import { factorBaseModel, modelMetadata, resolveModelMetadataBaseModel, withSystemOneImageInput } from "./openrouter.js";
 
 const API_ENDPOINT = "https://nano-gpt.com/api/v1/models?detailed=true";
 
@@ -125,7 +125,11 @@ export function buildNanoGptModel(
   const sourceOutputLimit = positive(model.max_output_tokens);
   const context = sourceContext ?? existing?.limit?.context;
   const inputLimit = sourceContext ?? existing?.limit?.input;
-  const outputLimit = sourceOutputLimit ?? existing?.limit?.output;
+  // Some models have no stated output limit, so text models fall back to the
+  // context window. Decision models return probabilities, not text, and need
+  // hand-written files, so they get no fallback.
+  const outputsText = model.architecture?.output_modalities?.includes("text") ?? true;
+  const outputLimit = sourceOutputLimit ?? existing?.limit?.output ?? (outputsText ? context : undefined);
   const releaseDate = dateFromTimestamp(model.created) ?? existing?.release_date;
   const hasReasoningEfforts = model.reasoning_efforts != null && model.reasoning_efforts.length > 0;
   const inferredSourceReasoning = hasReasoningEfforts
@@ -139,10 +143,13 @@ export function buildNanoGptModel(
       input: hasInputMetadata || existing !== undefined ? input : undefined,
       output: hasOutputMetadata || existing !== undefined ? output : undefined,
     };
+    const labLimit = modelMetadata(baseModel).limit as { context?: number; output?: number } | undefined;
     const factoredLimit = {
       context: sourceContext ?? existing?.limit?.context,
       input: sourceContext ?? existing?.limit?.input,
-      output: sourceOutputLimit ?? existing?.limit?.output,
+      output: sourceOutputLimit
+        ?? existing?.limit?.output
+        ?? (outputsText && labLimit?.output === undefined ? sourceContext ?? labLimit?.context : undefined),
     };
     const sourceReasoning = inferredSourceReasoning;
     const sourceReasoningOptions = reasoningOptions(model, sourceReasoning, existing?.reasoning_options);

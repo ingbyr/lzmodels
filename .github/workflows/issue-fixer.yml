@@ -43,12 +43,13 @@ jobs:
           echo "ISSUE_FILE=$ISSUE_FILE" >> "$GITHUB_ENV"
 
       - name: Install opencode
-        run: curl -fsSL https://opencode.ai/install | bash
+        run: curl -fsSL https://opencode.ai/install | bash -s -- --version 1.19.4
 
       - name: Run issue fixer
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENCODE_PERMISSION: '{"bash":"deny"}'
+          OPENCODE_CONFIG_CONTENT: '{"snapshot":false}'
         run: |
           set -euo pipefail
           EVENTS_FILE="$RUNNER_TEMP/issue-fixer-events.jsonl"
