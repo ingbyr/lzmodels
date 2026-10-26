@@ -3,7 +3,9 @@ import { expect, test } from "bun:test";
 import {
   buildWorkersAiModel,
   cloudflareWorkersAi,
+  schemaToolChoice,
   takesResponsesBody,
+  toolsWith,
   workersAiApis,
 } from "../src/sync/providers/cloudflare-workers-ai.js";
 import { patchModelV2 } from "../src/model-file-v2.js";
@@ -183,4 +185,42 @@ test("lists the Responses API after a Workers AI model's first table only when i
   expect(workersAiApis(once, false)).toEqual({ "chat-completions": {} });
   const run = { "workers-ai-run": { base_url: "https://example.com/ai/run" } };
   expect(workersAiApis(run, false)).toEqual(run);
+});
+
+test("reads tool_choice values from a request schema only when it names them", () => {
+  const named = (type: string) => ({ type: "object", properties: { type: { type: "string", enum: [type] } } });
+  // Workers AI chat schemas (GLM 5.3): string modes, a named function or custom tool, allowed_tools.
+  const workersAi = {
+    anyOf: [{
+      oneOf: [{
+        properties: {
+          tool_choice: {
+            anyOf: [{
+              oneOf: [{ type: "string", enum: ["none", "auto", "required"] }, named("function"), named("custom"), named("allowed_tools")],
+            }],
+          },
+        },
+      }],
+    }],
+  };
+  expect(schemaToolChoice(workersAi)).toEqual(["auto", "none", "required", "tool"]);
+  // Anthropic-shaped objects keyed by `type`, where "any" means required.
+  const anthropic = (types: string[]) => ({
+    properties: { tool_choice: { oneOf: types.map((type) => ({ type: "object", properties: { type: { type: "string", const: type } } })) } },
+  });
+  expect(schemaToolChoice(anthropic(["auto", "none"]))).toEqual(["auto", "none"]);
+  expect(schemaToolChoice(anthropic(["auto", "any", "tool", "none"]))).toEqual(["auto", "none", "required", "tool"]);
+  expect(schemaToolChoice({ oneOf: [{ properties: { tool_choice: { type: "string", enum: ["none", "auto"] } } }] })).toEqual(["auto", "none"]);
+  // An open string or an untyped field doesn't say which values work.
+  expect(schemaToolChoice({ properties: { tool_choice: { anyOf: [{ type: "string" }, named("function")] } } })).toBeUndefined();
+  expect(schemaToolChoice({ properties: { tool_choice: {} } })).toBeUndefined();
+  expect(schemaToolChoice({ properties: { tools: {} } })).toBeUndefined();
+});
+
+test("sets stated tool fields and keeps the file's others", () => {
+  expect(toolsWith(undefined, { choice: ["auto"] })).toEqual({ supported: true, choice: ["auto"] });
+  expect(toolsWith({ supported: true, updates: true, choice: ["auto"] }, { choice: ["auto", "none"] }))
+    .toEqual({ supported: true, updates: true, choice: ["auto", "none"] });
+  expect(toolsWith({ supported: true, choice: ["auto"] }, { choice: undefined })).toEqual({ supported: true, choice: ["auto"] });
+  expect(toolsWith({ supported: false }, { choice: ["auto"] })).toEqual({ supported: false });
 });
