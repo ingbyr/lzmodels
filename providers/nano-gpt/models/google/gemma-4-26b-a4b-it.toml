@@ -25,4 +25,4 @@ price = 0.062
 cache = { read = 0.031 }
 
 [cost.text.output]
-price = 0.186
+price = 0.187
