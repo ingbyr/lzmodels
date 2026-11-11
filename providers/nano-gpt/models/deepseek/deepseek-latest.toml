@@ -24,7 +24,7 @@ output = 384_000
 
 [cost.text.input]
 price = 0.65868
-cache = { read = 0.020958 }
+cache = { read = 0.105 }
 
 [cost.text.output]
-price = 1.97604
+price = 4.0139
