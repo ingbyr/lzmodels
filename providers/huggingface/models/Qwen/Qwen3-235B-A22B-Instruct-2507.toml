@@ -8,6 +8,9 @@ description = "Qwen instruction model for multilingual chat, reasoning, and tool
 tools = { supported = true }
 structured_output = true
 
+[limit]
+context = 131_072
+
 [api.chat-completions]
 compatibility = { max_tokens_field = "max_tokens" }
 
