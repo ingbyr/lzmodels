@@ -298,6 +298,7 @@ Cloudflare Workers AI is implemented in `packages/core/src/sync/providers/cloudf
 - The sync manages proxied third-party models. Text-generation rows become normal model files. `Text-to-Speech`, `Automatic Speech Recognition`, image (`Text-to-Image`, `Image-to-Image`) and video (`Text-to-Video`, `Image-to-Video`, `video-to-video`) rows become v2-only files (`v2_only = true`) on the REST API's `POST /ai/run` route, with per-character, per-minute, per-image, per-megapixel, per-second or per-token costs. Music generation, image-to-document and `websocket` rows are left out on purpose, and image/video ids without a lab file stay in `skip`. Workers AI `@cf/...` models remain under `providers/cloudflare-workers-ai`.
 - `providers/cloudflare-ai-gateway/curation.toml` supplies base-model mappings, live-tested reasoning controls, structured-output support, limit overrides, and intentional skips that the catalog cannot express authoritatively.
 - New catalog entries without canonical lab metadata or required reasoning controls fail closed instead of generating incomplete TOMLs.
+- New catalog entries with no lab file and no curated `base_model` are not created and open missing-model issues. IDs in curation's `skip` list are deliberate and never open issues.
 
 ## Google Notes
 
@@ -509,6 +510,7 @@ Requesty is implemented in `packages/core/src/sync/providers/requesty.ts`.
 - Anthropic files `.0` releases with an explicit `-0` (`claude-sonnet-4-0.toml`) while later point releases drop it, so bare `claude-<tier>-<major>` IDs retry against the `-0` filename.
 - Region variants are written as separate models: `gpt-5.4` and `gpt-5.4@eu` are distinct files that share a `base_model` and differ only in served pricing and limits.
 - Prices are per-token USD and are converted to per-1M-token numbers. `pricing[]` bands become `cost.tiers`, with the first band as the flat `cost`. Price fields are nullable upstream, so a route quoting no prices gets no `[cost]` section rather than a fabricated zero.
+- `supports_system_mid_conversation` owns `capabilities.system_updates`: `true` writes it, `false` removes it (and a new file doesn't inherit it from its predecessor), and a row without the field leaves the file's value.
 
 ## Venice Notes
 

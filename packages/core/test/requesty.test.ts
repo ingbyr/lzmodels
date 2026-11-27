@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
-import { buildRequestyModel, RequestyModel, resolveRequestyBaseModel } from "../src/sync/providers/requesty.js";
+import { syncProvider } from "../src/sync/index.js";
+import { buildRequestyModel, requesty, RequestyModel, resolveRequestyBaseModel } from "../src/sync/providers/requesty.js";
 
 test.each([
   ["claude-fable-5.1", "anthropic/claude-fable-5-1"],
@@ -277,4 +281,60 @@ test("hand-linked routes keep a curated display name", () => {
 
   expect(resolveRequestyBaseModel("inkling-256k")).toBeUndefined();
   expect(model).toMatchObject({ base_model: "thinkingmachines/inkling", name: "Inkling 256K" });
+});
+
+test("a route that states no mid-conversation system messages doesn't inherit them", () => {
+  const route = (supports: boolean) => requesty.translateModel(RequestyModel.parse({
+    id: "qwen4-max",
+    created: Date.parse("2026-11-16") / 1_000,
+    description: "Requesty description",
+    context_window: 262_144,
+    max_output_tokens: 0,
+    supports_system_mid_conversation: supports,
+    input_price: 0.0000015,
+    output_price: 0.0000045,
+  }), { existing: () => undefined, authored: () => undefined });
+
+  expect(route(false)).toMatchObject({ unsupported: ["capabilities.system_updates"] });
+  expect(route(true)).not.toHaveProperty("unsupported", expect.anything());
+});
+
+test.each([
+  [true, false, true],
+  [false, true, false],
+  [undefined, true, true],
+  [undefined, false, false],
+])("catalog system_updates %p on a file with it %p leaves it %p", async (catalog, before, after) => {
+  const root = await mkdtemp(path.join(tmpdir(), "models-dev-requesty-"));
+  const modelsDir = path.join(root, "providers", "requesty", "models");
+  await mkdir(modelsDir, { recursive: true });
+  const sync = (supports?: boolean) => syncProvider(
+    {
+      ...requesty,
+      modelsDir,
+      fetchModels: async () => ({
+        object: "list",
+        data: [{
+          id: "example-standalone-route",
+          created: Date.parse("2026-11-16") / 1_000,
+          description: "Requesty description",
+          context_window: 128_000,
+          max_output_tokens: 16_000,
+          supports_tool_calling: true,
+          ...(supports === undefined ? {} : { supports_system_mid_conversation: supports }),
+          input_price: 0.000001,
+          output_price: 0.000002,
+        }],
+      }),
+    },
+    { openIssues: false },
+  );
+  const systemUpdates = async () => (Bun.TOML.parse(
+    await readFile(path.join(modelsDir, "example-standalone-route.toml"), "utf8"),
+  ) as { capabilities: Record<string, unknown> }).capabilities.system_updates;
+
+  await sync(before);
+  expect(await systemUpdates()).toBe(before ? true : undefined);
+  await sync(catalog);
+  expect(await systemUpdates()).toBe(after ? true : undefined);
 });
